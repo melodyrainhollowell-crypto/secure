@@ -81,11 +81,44 @@ function payjsrAuthHeaders(secretKey) {
   };
 }
 
+const PAYJSR_CHECKOUT_ORIGIN = 'https://checkout.payjsr.com';
+const PAYJSR_UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function isPayjsrLinkUuid(value) {
+  return PAYJSR_UUID_RE.test(String(value || '').trim());
+}
+
+function payjsrCheckoutUrlFromUuid(id) {
+  const uuid = String(id || '').trim();
+  if (!isPayjsrLinkUuid(uuid)) return '';
+  return `${PAYJSR_CHECKOUT_ORIGIN}/${uuid}`;
+}
+
+function normalizePayjsrCheckoutUrl(url) {
+  const raw = String(url || '').trim();
+  if (!raw) return '';
+  if (/^https?:\/\//i.test(raw)) {
+    try {
+      const u = new URL(raw);
+      if (/checkout\.payjsr\.com$/i.test(u.hostname)) {
+        const seg = u.pathname.replace(/^\/+/, '').split('/')[0];
+        if (isPayjsrLinkUuid(seg)) return `${PAYJSR_CHECKOUT_ORIGIN}/${seg}`;
+      }
+    } catch {
+      /* ignore */
+    }
+    return raw;
+  }
+  return payjsrCheckoutUrlFromUuid(raw);
+}
+
 function collectPayjsrIds(obj, out = [], depth = 0) {
   if (!obj || depth > 8) return out;
   if (typeof obj === 'string') {
     const s = obj.trim();
-    if (s.length >= 6 && /^[A-Za-z0-9_\-]+$/.test(s)) out.push(s);
+    if (isPayjsrLinkUuid(s)) out.unshift(s);
+    else if (s.length >= 6 && /^[A-Za-z0-9_\-]+$/.test(s)) out.push(s);
     return out;
   }
   if (Array.isArray(obj)) {
@@ -93,9 +126,14 @@ function collectPayjsrIds(obj, out = [], depth = 0) {
     return out;
   }
   if (typeof obj === 'object') {
-    const idKeys = /^(id|payment_id|paymentid|session_id|sessionid|checkout_id|checkout_session_id|reference|order_id)$/i;
+    const idKeys =
+      /^(link_id|id|payment_link_id|payment_id|paymentid|session_id|sessionid|checkout_id|checkout_session_id|reference|order_id)$/i;
     for (const [k, v] of Object.entries(obj)) {
-      if (typeof v === 'string' && idKeys.test(k)) out.push(v.trim());
+      if (typeof v === 'string' && idKeys.test(k)) {
+        const s = v.trim();
+        if (isPayjsrLinkUuid(s)) out.unshift(s);
+        else out.push(s);
+      }
       collectPayjsrIds(v, out, depth + 1);
     }
   }
@@ -109,6 +147,10 @@ function extractPayjsrCheckoutUrl(data) {
     if (typeof obj === 'string') {
       const s = obj.trim();
       if (/^https?:\/\//i.test(s)) urls.push(s);
+      else {
+        const built = payjsrCheckoutUrlFromUuid(s);
+        if (built) urls.push(built);
+      }
       return;
     }
     if (Array.isArray(obj)) {
@@ -118,52 +160,45 @@ function extractPayjsrCheckoutUrl(data) {
     if (typeof obj === 'object') {
       for (const [k, v] of Object.entries(obj)) {
         const kl = k.toLowerCase();
-        if (
-          typeof v === 'string' &&
-          (/url|link|redirect/i.test(kl) || kl === 'href') &&
-          /^https?:\/\//i.test(v)
-        ) {
-          urls.push(v.trim());
+        if (typeof v === 'string') {
+          if ((/url|link|redirect/i.test(kl) || kl === 'href') && /^https?:\/\//i.test(v)) {
+            urls.push(v.trim());
+          } else {
+            const built = payjsrCheckoutUrlFromUuid(v);
+            if (built && /link|id|uuid|payment|checkout/i.test(kl)) urls.push(built);
+          }
         }
         visit(v, depth + 1);
       }
     }
   };
   visit(data);
-  const uniq = [...new Set(urls)];
-  const scored = uniq
+  const normalized = [...new Set(urls.map((u) => normalizePayjsrCheckoutUrl(u)).filter(Boolean))];
+  const scored = normalized
     .map((u) => {
       let score = 0;
+      if (/^https:\/\/checkout\.payjsr\.com\/[0-9a-f-]{36}$/i.test(u)) score += 100;
       if (/checkout\.payjsr/i.test(u)) score += 50;
       if (/payjsr/i.test(u)) score += 30;
-      if (/checkout|pay|payment/i.test(u)) score += 10;
       if (/localhost|example\.com/i.test(u)) score -= 100;
       return { u, score };
     })
     .sort((a, b) => b.score - a.score);
-  if (scored[0]?.score > 0) return scored[0].u;
-  return uniq[0] || '';
+  return scored[0]?.u || normalized[0] || '';
 }
 
 function buildPayjsrCheckoutUrlFromIds(ids) {
   const uniq = [...new Set((ids || []).map((x) => String(x || '').trim()).filter(Boolean))];
-  const patterns = [];
   for (const id of uniq) {
-    patterns.push(
-      `https://checkout.payjsr.com/checkout/core/${encodeURIComponent(id)}`,
-      `https://checkout.payjsr.com/pay/${encodeURIComponent(id)}`,
-      `https://checkout.payjsr.com/checkout/${encodeURIComponent(id)}`,
-      `https://pay.payjsr.com/${encodeURIComponent(id)}`,
-      `https://payjsr.com/checkout/${encodeURIComponent(id)}`
-    );
+    const url = payjsrCheckoutUrlFromUuid(id);
+    if (url) return url;
   }
-  return patterns[0] || '';
+  return '';
 }
 
 function resolvePayjsrCheckoutUrl(createData) {
-  const root = createData?.data || createData?.payment || createData?.session || createData || {};
   const direct = extractPayjsrCheckoutUrl(createData);
-  if (direct) return direct;
+  if (direct) return normalizePayjsrCheckoutUrl(direct);
   const ids = collectPayjsrIds(createData);
   return buildPayjsrCheckoutUrlFromIds(ids);
 }
@@ -202,7 +237,30 @@ async function createPayjsrCheckoutLink(secretKey, opts) {
   const currencyLower = currencyCode.toLowerCase();
   const reference = `ebook-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
+  const linkBase = {
+    name: maskedForProcessor.slice(0, 200),
+    title: maskedForProcessor.slice(0, 200),
+    description: maskedForProcessor.slice(0, 200),
+    currency: currencyCode,
+    type: 'one_time',
+    billing_type: 'one_time',
+    success_url: successIntermediate,
+    cancel_url: cancelReturn,
+    redirect_url: successIntermediate,
+    return_url: successIntermediate,
+    metadata: {
+      product_name: maskedForProcessor,
+      display_title: realForBuyer || maskedForProcessor,
+      reference,
+    },
+  };
+
   const attempts = [
+    { path: '/v1/payment-links', body: { ...linkBase, amount: amountNumber } },
+    { path: '/v1/payment-links', body: { ...linkBase, amount: amountCents, amount_unit: 'cents' } },
+    { path: '/v1/payment_links', body: { ...linkBase, amount: amountNumber } },
+    { path: '/v1/commerce/payment-links', body: { ...linkBase, amount: amountNumber } },
+    { path: '/v1/commerce/payment-links', body: { ...linkBase, amount: amountCents } },
     {
       path: '/v1/checkout/sessions',
       body: {
@@ -212,11 +270,7 @@ async function createPayjsrCheckoutLink(secretKey, opts) {
         success_url: successIntermediate,
         cancel_url: cancelReturn,
         return_url: successIntermediate,
-        metadata: {
-          product_name: maskedForProcessor,
-          display_title: realForBuyer || maskedForProcessor,
-          reference,
-        },
+        metadata: linkBase.metadata,
       },
     },
     {
@@ -240,11 +294,7 @@ async function createPayjsrCheckoutLink(secretKey, opts) {
         mode: 'redirect',
         success_url: successIntermediate,
         cancel_url: cancelReturn,
-        metadata: {
-          product_name: maskedForProcessor,
-          display_title: realForBuyer || maskedForProcessor,
-          reference,
-        },
+        metadata: linkBase.metadata,
       },
     },
     {
@@ -258,16 +308,6 @@ async function createPayjsrCheckoutLink(secretKey, opts) {
         success_url: successIntermediate,
         cancel_url: cancelReturn,
         metadata: { product_name: maskedForProcessor, reference },
-      },
-    },
-    {
-      path: '/v1/checkout-payment-link/integration/v1/payment-links',
-      body: {
-        name: maskedForProcessor.slice(0, 200),
-        purchase: { amount: amountCents, currency: currencyCode },
-        experience: { language: 'en', payment_flow: 'payjsr_checkout' },
-        payment_details: { purpose: maskedForProcessor.slice(0, 200) },
-        metadata: { reference, display_title: realForBuyer || maskedForProcessor },
       },
     },
   ];
@@ -285,19 +325,21 @@ async function createPayjsrCheckoutLink(secretKey, opts) {
       continue;
     }
 
-    let checkoutUrl = resolvePayjsrCheckoutUrl(result.data);
+    let checkoutUrl = normalizePayjsrCheckoutUrl(resolvePayjsrCheckoutUrl(result.data));
     const ids = collectPayjsrIds(result.data);
-    const paymentId = ids[0] || '';
+    const paymentId = ids.find((id) => isPayjsrLinkUuid(id)) || ids[0] || '';
 
     if (!checkoutUrl && paymentId) {
       const lookups = [
+        `/v1/payment-links/${encodeURIComponent(paymentId)}`,
+        `/v1/payment_links/${encodeURIComponent(paymentId)}`,
         `/v1/payments/${encodeURIComponent(paymentId)}`,
         `/v1/checkout/sessions/${encodeURIComponent(paymentId)}`,
       ];
       for (const lookupPath of lookups) {
         const lookup = await payjsrApiGet(secretKey, lookupPath);
         if (!lookup.ok) continue;
-        checkoutUrl = resolvePayjsrCheckoutUrl(lookup.data);
+        checkoutUrl = normalizePayjsrCheckoutUrl(resolvePayjsrCheckoutUrl(lookup.data));
         if (checkoutUrl) break;
       }
     }
@@ -307,7 +349,7 @@ async function createPayjsrCheckoutLink(secretKey, opts) {
     }
 
     if (checkoutUrl) {
-      return { checkoutUrl: String(checkoutUrl), paymentId, endpoint: attempt.path };
+      return { checkoutUrl: normalizePayjsrCheckoutUrl(checkoutUrl), paymentId, endpoint: attempt.path };
     }
 
     lastError = `${attempt.path}: missing checkout link in response`;
