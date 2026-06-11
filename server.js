@@ -71,6 +71,252 @@ const getEbooksReturnUrl = (origin, status, productName, amount) => {
   return `${origin}/?${params.toString()}`;
 };
 
+function payjsrAuthHeaders(secretKey) {
+  const key = String(secretKey || '').trim();
+  return {
+    'Content-Type': 'application/json',
+    Accept: 'application/json',
+    Authorization: `Bearer ${key}`,
+    'x-api-key': key,
+  };
+}
+
+function collectPayjsrIds(obj, out = [], depth = 0) {
+  if (!obj || depth > 8) return out;
+  if (typeof obj === 'string') {
+    const s = obj.trim();
+    if (s.length >= 6 && /^[A-Za-z0-9_\-]+$/.test(s)) out.push(s);
+    return out;
+  }
+  if (Array.isArray(obj)) {
+    obj.forEach((v) => collectPayjsrIds(v, out, depth + 1));
+    return out;
+  }
+  if (typeof obj === 'object') {
+    const idKeys = /^(id|payment_id|paymentid|session_id|sessionid|checkout_id|checkout_session_id|reference|order_id)$/i;
+    for (const [k, v] of Object.entries(obj)) {
+      if (typeof v === 'string' && idKeys.test(k)) out.push(v.trim());
+      collectPayjsrIds(v, out, depth + 1);
+    }
+  }
+  return out;
+}
+
+function extractPayjsrCheckoutUrl(data) {
+  const urls = [];
+  const visit = (obj, depth = 0) => {
+    if (!obj || depth > 10) return;
+    if (typeof obj === 'string') {
+      const s = obj.trim();
+      if (/^https?:\/\//i.test(s)) urls.push(s);
+      return;
+    }
+    if (Array.isArray(obj)) {
+      obj.forEach((v) => visit(v, depth + 1));
+      return;
+    }
+    if (typeof obj === 'object') {
+      for (const [k, v] of Object.entries(obj)) {
+        const kl = k.toLowerCase();
+        if (
+          typeof v === 'string' &&
+          (/url|link|redirect/i.test(kl) || kl === 'href') &&
+          /^https?:\/\//i.test(v)
+        ) {
+          urls.push(v.trim());
+        }
+        visit(v, depth + 1);
+      }
+    }
+  };
+  visit(data);
+  const uniq = [...new Set(urls)];
+  const scored = uniq
+    .map((u) => {
+      let score = 0;
+      if (/checkout\.payjsr/i.test(u)) score += 50;
+      if (/payjsr/i.test(u)) score += 30;
+      if (/checkout|pay|payment/i.test(u)) score += 10;
+      if (/localhost|example\.com/i.test(u)) score -= 100;
+      return { u, score };
+    })
+    .sort((a, b) => b.score - a.score);
+  if (scored[0]?.score > 0) return scored[0].u;
+  return uniq[0] || '';
+}
+
+function buildPayjsrCheckoutUrlFromIds(ids) {
+  const uniq = [...new Set((ids || []).map((x) => String(x || '').trim()).filter(Boolean))];
+  const patterns = [];
+  for (const id of uniq) {
+    patterns.push(
+      `https://checkout.payjsr.com/checkout/core/${encodeURIComponent(id)}`,
+      `https://checkout.payjsr.com/pay/${encodeURIComponent(id)}`,
+      `https://checkout.payjsr.com/checkout/${encodeURIComponent(id)}`,
+      `https://pay.payjsr.com/${encodeURIComponent(id)}`,
+      `https://payjsr.com/checkout/${encodeURIComponent(id)}`
+    );
+  }
+  return patterns[0] || '';
+}
+
+function resolvePayjsrCheckoutUrl(createData) {
+  const root = createData?.data || createData?.payment || createData?.session || createData || {};
+  const direct = extractPayjsrCheckoutUrl(createData);
+  if (direct) return direct;
+  const ids = collectPayjsrIds(createData);
+  return buildPayjsrCheckoutUrlFromIds(ids);
+}
+
+async function payjsrApiPost(secretKey, path, body) {
+  const url = `https://api.payjsr.com${path}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: payjsrAuthHeaders(secretKey),
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  return { ok: res.ok, status: res.status, data, path };
+}
+
+async function payjsrApiGet(secretKey, path) {
+  const url = `https://api.payjsr.com${path}`;
+  const res = await fetch(url, {
+    method: 'GET',
+    headers: payjsrAuthHeaders(secretKey),
+  });
+  const data = await res.json().catch(() => ({}));
+  return { ok: res.ok, status: res.status, data, path };
+}
+
+async function createPayjsrCheckoutLink(secretKey, opts) {
+  const {
+    amountCents,
+    amountNumber,
+    currencyCode,
+    maskedForProcessor,
+    realForBuyer,
+    successIntermediate,
+    cancelReturn,
+  } = opts;
+  const currencyLower = currencyCode.toLowerCase();
+  const reference = `ebook-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+  const attempts = [
+    {
+      path: '/v1/checkout/sessions',
+      body: {
+        amount: amountCents,
+        currency: currencyLower,
+        description: maskedForProcessor,
+        success_url: successIntermediate,
+        cancel_url: cancelReturn,
+        return_url: successIntermediate,
+        metadata: {
+          product_name: maskedForProcessor,
+          display_title: realForBuyer || maskedForProcessor,
+          reference,
+        },
+      },
+    },
+    {
+      path: '/v1/checkout/sessions',
+      body: {
+        amount: amountNumber,
+        currency: currencyCode,
+        description: maskedForProcessor,
+        success_url: successIntermediate,
+        cancel_url: cancelReturn,
+        reference,
+      },
+    },
+    {
+      path: '/v1/payments',
+      body: {
+        amount: amountCents,
+        currency: currencyCode,
+        description: maskedForProcessor,
+        billing_type: 'one_time',
+        mode: 'redirect',
+        success_url: successIntermediate,
+        cancel_url: cancelReturn,
+        metadata: {
+          product_name: maskedForProcessor,
+          display_title: realForBuyer || maskedForProcessor,
+          reference,
+        },
+      },
+    },
+    {
+      path: '/v1/api-create-payment',
+      body: {
+        amount: amountCents,
+        currency: currencyCode,
+        description: maskedForProcessor,
+        billing_type: 'one_time',
+        mode: 'redirect',
+        success_url: successIntermediate,
+        cancel_url: cancelReturn,
+        metadata: { product_name: maskedForProcessor, reference },
+      },
+    },
+    {
+      path: '/v1/checkout-payment-link/integration/v1/payment-links',
+      body: {
+        name: maskedForProcessor.slice(0, 200),
+        purchase: { amount: amountCents, currency: currencyCode },
+        experience: { language: 'en', payment_flow: 'payjsr_checkout' },
+        payment_details: { purpose: maskedForProcessor.slice(0, 200) },
+        metadata: { reference, display_title: realForBuyer || maskedForProcessor },
+      },
+    },
+  ];
+
+  let lastError = 'unknown error';
+  for (const attempt of attempts) {
+    const result = await payjsrApiPost(secretKey, attempt.path, attempt.body);
+    if (!result.ok) {
+      const err =
+        result.data?.error?.message ||
+        result.data?.error ||
+        result.data?.message ||
+        `HTTP ${result.status}`;
+      lastError = `${attempt.path}: ${String(err).slice(0, 200)}`;
+      continue;
+    }
+
+    let checkoutUrl = resolvePayjsrCheckoutUrl(result.data);
+    const ids = collectPayjsrIds(result.data);
+    const paymentId = ids[0] || '';
+
+    if (!checkoutUrl && paymentId) {
+      const lookups = [
+        `/v1/payments/${encodeURIComponent(paymentId)}`,
+        `/v1/checkout/sessions/${encodeURIComponent(paymentId)}`,
+      ];
+      for (const lookupPath of lookups) {
+        const lookup = await payjsrApiGet(secretKey, lookupPath);
+        if (!lookup.ok) continue;
+        checkoutUrl = resolvePayjsrCheckoutUrl(lookup.data);
+        if (checkoutUrl) break;
+      }
+    }
+
+    if (!checkoutUrl && paymentId) {
+      checkoutUrl = buildPayjsrCheckoutUrlFromIds([paymentId]);
+    }
+
+    if (checkoutUrl) {
+      return { checkoutUrl: String(checkoutUrl), paymentId, endpoint: attempt.path };
+    }
+
+    lastError = `${attempt.path}: missing checkout link in response`;
+    console.warn('PayJSR response without URL keys:', Object.keys(result.data || {}));
+  }
+
+  throw new Error(lastError);
+}
+
 async function getPayjsrSecretKey() {
   const fromEnv = String(process.env.PAYJSR_SECRET_KEY || '').trim();
   if (fromEnv) return fromEnv;
@@ -194,48 +440,22 @@ async function handlePayJSRCheckout(req, res) {
     : getEbooksReturnUrl(origin, 'cancel', maskedForProcessor, amountNumber.toFixed(2));
   const successIntermediate = `${origin}/api/payjsr-success?forward=${encodeURIComponent(forwardSuccess)}`;
 
-  const payload = {
-    amount: amountCents,
-    currency: String(currency || 'USD').toUpperCase(),
-    description: maskedForProcessor,
-    billing_type: 'one_time',
-    mode: 'redirect',
-    success_url: successIntermediate,
-    cancel_url: cancelReturn,
-    metadata: {
-      product_name: maskedForProcessor,
-      display_title: realForBuyer || maskedForProcessor,
-    },
-  };
-
-  let createRes = await fetch('https://api.payjsr.com/v1/payments', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-api-key': payjsrSecretKey },
-    body: JSON.stringify(payload),
-  });
-  if (!createRes.ok && createRes.status === 404) {
-    createRes = await fetch('https://api.payjsr.com/v1/api-create-payment', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-api-key': payjsrSecretKey },
-      body: JSON.stringify(payload),
+  const currencyCode = String(currency || 'USD').toUpperCase();
+  let checkoutUrl = '';
+  try {
+    const created = await createPayjsrCheckoutLink(payjsrSecretKey, {
+      amountCents,
+      amountNumber,
+      currencyCode,
+      maskedForProcessor,
+      realForBuyer,
+      successIntermediate,
+      cancelReturn,
     });
-  }
-
-  const createData = await createRes.json().catch(() => ({}));
-  if (!createRes.ok) {
-    return res
-      .status(createRes.status)
-      .send(`Checkout failed (PayJSR): ${createData?.error || createData?.message || 'unknown error'}`);
-  }
-
-  const normalized = createData?.data || createData || {};
-  const checkoutUrl =
-    normalized?.checkout_url ||
-    normalized?.payment_link ||
-    normalized?.payment_url ||
-    normalized?.url;
-  if (!checkoutUrl) {
-    return res.status(502).send('Checkout failed (PayJSR): missing checkout/payment link');
+    checkoutUrl = created.checkoutUrl;
+  } catch (err) {
+    console.error('PayJSR checkout create failed:', err.message);
+    return res.status(502).send(`Checkout failed (PayJSR): ${err.message}`);
   }
 
   const showPrivacyBlurb =
@@ -246,7 +466,7 @@ async function handlePayJSRCheckout(req, res) {
     realTitle: realForBuyer || maskedForProcessor,
     maskedLabel: maskedForProcessor,
     amountStr: amountNumber.toFixed(2),
-    currencyCode: String(currency || 'USD').toUpperCase(),
+    currencyCode,
     showPrivacyBlurb,
   });
 }
