@@ -71,14 +71,38 @@ const getEbooksReturnUrl = (origin, status, productName, amount) => {
   return `${origin}/?${params.toString()}`;
 };
 
-function payjsrAuthHeaders(secretKey) {
+function payjsrAuthHeaders(secretKey, mode = 'both') {
   const key = String(secretKey || '').trim();
-  return {
+  const headers = {
     'Content-Type': 'application/json',
     Accept: 'application/json',
-    Authorization: `Bearer ${key}`,
-    'x-api-key': key,
   };
+  if (mode === 'both' || mode === 'bearer') headers.Authorization = `Bearer ${key}`;
+  if (mode === 'both' || mode === 'x-api-key') headers['x-api-key'] = key;
+  return headers;
+}
+
+function findAllPayjsrUuids(obj, out = [], depth = 0) {
+  if (!obj || depth > 15) return out;
+  if (typeof obj === 'string') {
+    const s = obj.trim();
+    if (isPayjsrLinkUuid(s)) out.push(s);
+    return out;
+  }
+  if (Array.isArray(obj)) {
+    obj.forEach((v) => findAllPayjsrUuids(v, out, depth + 1));
+    return out;
+  }
+  if (typeof obj === 'object') {
+    Object.values(obj).forEach((v) => findAllPayjsrUuids(v, out, depth + 1));
+  }
+  return out;
+}
+
+function extractPayjsrUrlFromText(text) {
+  const raw = String(text || '');
+  const m = raw.match(/https:\/\/checkout\.payjsr\.com\/[0-9a-f-]{36}/i);
+  return m ? normalizePayjsrCheckoutUrl(m[0]) : '';
 }
 
 const PAYJSR_CHECKOUT_ORIGIN = 'https://checkout.payjsr.com';
@@ -161,7 +185,7 @@ function extractPayjsrCheckoutUrl(data) {
       for (const [k, v] of Object.entries(obj)) {
         const kl = k.toLowerCase();
         if (typeof v === 'string') {
-          if ((/url|link|redirect/i.test(kl) || kl === 'href') && /^https?:\/\//i.test(v)) {
+          if ((/url|link|redirect|checkout|href/i.test(kl)) && /^https?:\/\//i.test(v)) {
             urls.push(v.trim());
           } else {
             const built = payjsrCheckoutUrlFromUuid(v);
@@ -196,32 +220,53 @@ function buildPayjsrCheckoutUrlFromIds(ids) {
   return '';
 }
 
-function resolvePayjsrCheckoutUrl(createData) {
+function resolvePayjsrCheckoutUrl(createData, rawText) {
+  const fromText = extractPayjsrUrlFromText(rawText);
+  if (fromText) return fromText;
   const direct = extractPayjsrCheckoutUrl(createData);
   if (direct) return normalizePayjsrCheckoutUrl(direct);
+  const uuids = findAllPayjsrUuids(createData);
+  if (uuids.length) return payjsrCheckoutUrlFromUuid(uuids[0]);
   const ids = collectPayjsrIds(createData);
   return buildPayjsrCheckoutUrlFromIds(ids);
 }
 
-async function payjsrApiPost(secretKey, path, body) {
-  const url = `https://api.payjsr.com${path}`;
+const PAYJSR_API_BASES = [
+  String(process.env.PAYJSR_API_BASE || '').trim(),
+  'https://api.payjsr.com',
+].filter(Boolean);
+
+async function payjsrApiPost(secretKey, base, path, body, authMode = 'x-api-key') {
+  const url = `${String(base).replace(/\/+$/, '')}${path}`;
   const res = await fetch(url, {
     method: 'POST',
-    headers: payjsrAuthHeaders(secretKey),
+    headers: payjsrAuthHeaders(secretKey, authMode),
     body: JSON.stringify(body),
   });
-  const data = await res.json().catch(() => ({}));
-  return { ok: res.ok, status: res.status, data, path };
+  const text = await res.text();
+  let data = {};
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    data = { _raw: text };
+  }
+  return { ok: res.ok, status: res.status, data, text, path, base, authMode };
 }
 
-async function payjsrApiGet(secretKey, path) {
-  const url = `https://api.payjsr.com${path}`;
+async function payjsrApiGet(secretKey, base, path, authMode = 'x-api-key') {
+  const url = `${String(base).replace(/\/+$/, '')}${path}`;
   const res = await fetch(url, {
     method: 'GET',
-    headers: payjsrAuthHeaders(secretKey),
+    headers: payjsrAuthHeaders(secretKey, authMode),
   });
-  const data = await res.json().catch(() => ({}));
-  return { ok: res.ok, status: res.status, data, path };
+  const text = await res.text();
+  let data = {};
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    data = { _raw: text };
+  }
+  return { ok: res.ok, status: res.status, data, text, path, base, authMode };
 }
 
 async function createPayjsrCheckoutLink(secretKey, opts) {
@@ -255,33 +300,21 @@ async function createPayjsrCheckoutLink(secretKey, opts) {
     },
   };
 
-  const attempts = [
-    { path: '/v1/payment-links', body: { ...linkBase, amount: amountNumber } },
-    { path: '/v1/payment-links', body: { ...linkBase, amount: amountCents, amount_unit: 'cents' } },
-    { path: '/v1/payment_links', body: { ...linkBase, amount: amountNumber } },
-    { path: '/v1/commerce/payment-links', body: { ...linkBase, amount: amountNumber } },
-    { path: '/v1/commerce/payment-links', body: { ...linkBase, amount: amountCents } },
+  const pathBodies = [
+    { path: '/v1/payment-links', body: { name: linkBase.name, amount: amountNumber, currency: currencyCode, type: 'one_time', status: 'active' } },
+    { path: '/v1/payment-links', body: { ...linkBase, amount: amountNumber, status: 'active' } },
+    { path: '/v1/commerce/payment-links', body: { name: linkBase.name, amount: amountNumber, currency: currencyCode, type: 'one_time' } },
     {
-      path: '/v1/checkout/sessions',
+      path: '/v1/api-create-payment',
       body: {
         amount: amountCents,
-        currency: currencyLower,
-        description: maskedForProcessor,
-        success_url: successIntermediate,
-        cancel_url: cancelReturn,
-        return_url: successIntermediate,
-        metadata: linkBase.metadata,
-      },
-    },
-    {
-      path: '/v1/checkout/sessions',
-      body: {
-        amount: amountNumber,
         currency: currencyCode,
         description: maskedForProcessor,
+        billing_type: 'one_time',
+        mode: 'redirect',
         success_url: successIntermediate,
         cancel_url: cancelReturn,
-        reference,
+        metadata: { product_name: maskedForProcessor, reference },
       },
     },
     {
@@ -298,48 +331,60 @@ async function createPayjsrCheckoutLink(secretKey, opts) {
       },
     },
     {
-      path: '/v1/api-create-payment',
+      path: '/v1/checkout/sessions',
       body: {
         amount: amountCents,
-        currency: currencyCode,
+        currency: currencyLower,
         description: maskedForProcessor,
-        billing_type: 'one_time',
-        mode: 'redirect',
         success_url: successIntermediate,
         cancel_url: cancelReturn,
-        metadata: { product_name: maskedForProcessor, reference },
+        return_url: successIntermediate,
+        metadata: linkBase.metadata,
       },
     },
   ];
 
+  const attempts = [];
+  for (const base of PAYJSR_API_BASES) {
+    for (const authMode of ['x-api-key', 'bearer']) {
+      for (const item of pathBodies) {
+        attempts.push({ base, authMode, path: item.path, body: item.body });
+      }
+    }
+  }
+
   let lastError = 'unknown error';
   for (const attempt of attempts) {
-    const result = await payjsrApiPost(secretKey, attempt.path, attempt.body);
+    const result = await payjsrApiPost(secretKey, attempt.base, attempt.path, attempt.body, attempt.authMode);
     if (!result.ok) {
       const err =
         result.data?.error?.message ||
         result.data?.error ||
         result.data?.message ||
         `HTTP ${result.status}`;
-      lastError = `${attempt.path}: ${String(err).slice(0, 200)}`;
+      lastError = `${attempt.path}@${attempt.base}: ${String(err).slice(0, 200)}`;
       continue;
     }
 
-    let checkoutUrl = normalizePayjsrCheckoutUrl(resolvePayjsrCheckoutUrl(result.data));
-    const ids = collectPayjsrIds(result.data);
-    const paymentId = ids.find((id) => isPayjsrLinkUuid(id)) || ids[0] || '';
+    let checkoutUrl = normalizePayjsrCheckoutUrl(
+      resolvePayjsrCheckoutUrl(result.data, result.text)
+    );
+    const uuids = findAllPayjsrUuids(result.data);
+    const paymentId = uuids[0] || collectPayjsrIds(result.data)[0] || '';
 
     if (!checkoutUrl && paymentId) {
       const lookups = [
         `/v1/payment-links/${encodeURIComponent(paymentId)}`,
-        `/v1/payment_links/${encodeURIComponent(paymentId)}`,
+        `/v1/commerce/payment-links/${encodeURIComponent(paymentId)}`,
         `/v1/payments/${encodeURIComponent(paymentId)}`,
         `/v1/checkout/sessions/${encodeURIComponent(paymentId)}`,
       ];
       for (const lookupPath of lookups) {
-        const lookup = await payjsrApiGet(secretKey, lookupPath);
+        const lookup = await payjsrApiGet(secretKey, attempt.base, lookupPath, attempt.authMode);
         if (!lookup.ok) continue;
-        checkoutUrl = normalizePayjsrCheckoutUrl(resolvePayjsrCheckoutUrl(lookup.data));
+        checkoutUrl = normalizePayjsrCheckoutUrl(
+          resolvePayjsrCheckoutUrl(lookup.data, lookup.text)
+        );
         if (checkoutUrl) break;
       }
     }
@@ -349,14 +394,52 @@ async function createPayjsrCheckoutLink(secretKey, opts) {
     }
 
     if (checkoutUrl) {
-      return { checkoutUrl: normalizePayjsrCheckoutUrl(checkoutUrl), paymentId, endpoint: attempt.path };
+      return {
+        checkoutUrl: normalizePayjsrCheckoutUrl(checkoutUrl),
+        paymentId,
+        endpoint: `${attempt.path}@${attempt.base}`,
+      };
     }
 
-    lastError = `${attempt.path}: missing checkout link in response`;
-    console.warn('PayJSR response without URL keys:', Object.keys(result.data || {}));
+    const preview = String(result.text || JSON.stringify(result.data)).slice(0, 280);
+    lastError = `${attempt.path}: missing checkout link (response: ${preview})`;
+    console.warn('PayJSR response without link:', attempt.path, attempt.base, preview);
   }
 
   throw new Error(lastError);
+}
+
+async function createStripeCheckoutFallback(secretKey, opts) {
+  const key = String(secretKey || '').trim();
+  if (!/^sk_(live|test)_/i.test(key)) return null;
+  const {
+    amountCents,
+    currencyCode,
+    maskedForProcessor,
+    successIntermediate,
+    cancelReturn,
+  } = opts;
+  const params = new URLSearchParams();
+  params.set('mode', 'payment');
+  params.set('success_url', successIntermediate);
+  params.set('cancel_url', cancelReturn);
+  params.set('line_items[0][quantity]', '1');
+  params.set('line_items[0][price_data][currency]', currencyCode.toLowerCase());
+  params.set('line_items[0][price_data][unit_amount]', String(amountCents));
+  params.set('line_items[0][price_data][product_data][name]', maskedForProcessor.slice(0, 200));
+  const res = await fetch('https://api.stripe.com/v1/checkout/sessions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${key}`,
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: params.toString(),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data?.url) {
+    throw new Error(data?.error?.message || 'Stripe checkout fallback failed');
+  }
+  return { checkoutUrl: String(data.url), paymentId: String(data.id || ''), endpoint: 'stripe/checkout/sessions' };
 }
 
 async function getPayjsrSecretKey() {
@@ -495,9 +578,26 @@ async function handlePayJSRCheckout(req, res) {
       cancelReturn,
     });
     checkoutUrl = created.checkoutUrl;
-  } catch (err) {
-    console.error('PayJSR checkout create failed:', err.message);
-    return res.status(502).send(`Checkout failed (PayJSR): ${err.message}`);
+  } catch (payjsrErr) {
+    console.error('PayJSR checkout create failed:', payjsrErr.message);
+    try {
+      const stripeFallback = await createStripeCheckoutFallback(payjsrSecretKey, {
+        amountCents,
+        currencyCode,
+        maskedForProcessor,
+        successIntermediate,
+        cancelReturn,
+      });
+      if (stripeFallback?.checkoutUrl) {
+        checkoutUrl = stripeFallback.checkoutUrl;
+      } else {
+        return res.status(502).send(`Checkout failed (PayJSR): ${payjsrErr.message}`);
+      }
+    } catch (stripeErr) {
+      return res
+        .status(502)
+        .send(`Checkout failed (PayJSR): ${payjsrErr.message}. Fallback: ${stripeErr.message}`);
+    }
   }
 
   const showPrivacyBlurb =
