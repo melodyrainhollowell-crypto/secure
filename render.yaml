@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: ebooks-checkout
+    env: node
+    buildCommand: npm install
+    startCommand: node server.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: SITE_NAME
+        sync: false
+        # Defina no painel Render, ex: "Readify Books" ou o nome que preferir
+      - key: WHOP_API_KEY
+        sync: false
+        # Whop Company API key (Bearer)
+      - key: WHOP_COMPANY_ID
+        sync: false
+        # Whop company id (biz_...)
+      - key: PADDLE_API_KEY
+        sync: false
+        # Paddle Billing API key (pdl_live_apikey_... ou pdl_sdbx_apikey_...)
+      - key: PADDLE_CLIENT_TOKEN
+        sync: false
+        # Client-side token for Paddle.js (live_... / test_...)
