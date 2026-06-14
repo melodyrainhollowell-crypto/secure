@@ -564,7 +564,7 @@ function sendWhopCheckoutPage(res, payload) {
         }
         <p class="amount">$${htmlAmount} <small style="font-size:.76rem;color:var(--muted);font-weight:700">${htmlCur}</small></p>
         <a class="btn" id="btn-whop" href="${escapeHtml(checkoutUrl)}">Continue to secure payment</a>
-        <p class="fine">You will complete payment on Whop (card, PayPal, Apple Pay, crypto). After payment you return here, then to the store.</p>
+        <p class="fine">You will complete payment on Whop using the methods enabled on our account. After payment you return here, then to the store.</p>
       </div>
     </article>
   </div>
@@ -1068,11 +1068,6 @@ async function handleWhopCheckout(req, res) {
         description: 'Digital ebook and educational content.',
         visibility: 'hidden',
         redirect_purchase_url: successIntermediate,
-      },
-      payment_method_configuration: {
-        enabled: ['card', 'apple_pay', 'cashapp', 'paypal'],
-        disabled: [],
-        include_platform_defaults: false,
       },
     },
   };
