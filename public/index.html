@@ -989,7 +989,7 @@
         p.set('cancel_url', cancelUrl);
         p.set('product_name', name);
         p.set('display_title', displayTitle || name);
-        p.set('method', method || 'paypal');
+        p.set('method', method || 'whop');
         return '/api/paypal-checkout?' + p.toString();
       }
 

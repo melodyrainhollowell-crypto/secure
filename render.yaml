@@ -16,6 +16,9 @@ services:
       - key: WHOP_COMPANY_ID
         sync: false
         # Whop company id (biz_...)
+      - key: TELEGRAM_USERNAME
+        sync: false
+        # Post-payment redirect only (not checkout)
       - key: PADDLE_API_KEY
         sync: false
         # Paddle Billing API key (pdl_live_apikey_... ou pdl_sdbx_apikey_...)
