@@ -19,6 +19,12 @@ services:
       - key: TELEGRAM_USERNAME
         sync: false
         # Post-payment redirect only (not checkout)
+      - key: STRIPE_SECRET_KEY
+        sync: false
+        # Stripe secret key (sk_live_... / sk_test_...)
+      - key: STRIPE_PUBLISHABLE_KEY
+        sync: false
+        # Stripe publishable key (pk_live_... / pk_test_...)
       - key: PADDLE_API_KEY
         sync: false
         # Paddle Billing API key (pdl_live_apikey_... ou pdl_sdbx_apikey_...)

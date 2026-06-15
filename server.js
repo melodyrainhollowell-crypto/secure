@@ -11,8 +11,8 @@ const PORT = process.env.PORT || 3001;
 const SITE_NAME = process.env.SITE_NAME || 'EbookStore';
 /** Telegram for post-payment redirect (checkout success on this host). Videos-site passes Supabase user via ?telegram_username= when possible. */
 const TELEGRAM_USERNAME = process.env.TELEGRAM_USERNAME || '';
-/** Default checkout for videos-site and bare /api/paypal-checkout links (PayPal stays on method=paypal). */
-const CHECKOUT_DEFAULT_METHOD = 'whop';
+/** Default checkout for videos-site and bare /api/paypal-checkout links. */
+const CHECKOUT_DEFAULT_METHOD = 'stripe';
 
 app.use(express.json());
 
@@ -24,6 +24,7 @@ function isCheckoutQuery(q) {
     q.method === 'paddle' ||
     q.method === 'payjsr' ||
     q.method === 'whop' ||
+    q.method === 'stripe' ||
     q.method === 'zuckpay' ||
     (q.video_id && (q.product_name || q.display_title))
   );
@@ -471,6 +472,18 @@ function getWhopCredentials() {
   };
 }
 
+function getStripeCredentials() {
+  return {
+    secretKey: String(process.env.STRIPE_SECRET_KEY || process.env.STRIPE_SK || '').trim(),
+    publishableKey: String(
+      process.env.STRIPE_PUBLISHABLE_KEY ||
+        process.env.STRIPE_PK ||
+        process.env.VITE_STRIPE_PUBLISHABLE_KEY ||
+        ''
+    ).trim(),
+  };
+}
+
 function slugForWhop(value) {
   return String(value || 'digital-ebook')
     .toLowerCase()
@@ -487,12 +500,17 @@ function sendWhopCheckoutPage(res, payload) {
     amountStr,
     currencyCode,
     showPrivacyBlurb,
+    processorName = 'Whop',
+    finePrint,
   } = payload;
   const htmlReal = escapeHtml(realTitle);
   const htmlMasked = escapeHtml(maskedLabel);
   const htmlAmount = escapeHtml(amountStr);
   const htmlCur = escapeHtml(currencyCode);
   const safeCheckoutUrl = escapeForJs(checkoutUrl);
+  const fine =
+    finePrint ||
+    `You will complete payment on ${processorName}. After payment you return here, then to Telegram for access.`;
   applyCommonHeaders(res);
   res.send(`<!DOCTYPE html>
 <html lang="en">
@@ -546,7 +564,7 @@ function sendWhopCheckoutPage(res, payload) {
     <article class="card">
       <div class="card-accent" aria-hidden="true"></div>
       <div class="card-body">
-        <p class="eyebrow">Secure checkout · Whop</p>
+        <p class="eyebrow">Secure checkout · ${escapeHtml(processorName)}</p>
         <h1 class="brand">${escapeHtml(SITE_NAME)}</h1>
         <div class="divider"></div>
         <p class="label">Your order</p>
@@ -564,7 +582,7 @@ function sendWhopCheckoutPage(res, payload) {
         }
         <p class="amount">$${htmlAmount} <small style="font-size:.76rem;color:var(--muted);font-weight:700">${htmlCur}</small></p>
         <a class="btn" id="btn-whop" href="${escapeHtml(checkoutUrl)}">Continue to secure payment</a>
-        <p class="fine">You will complete payment on Whop using the methods enabled on our account. After payment you return here, then to the store.</p>
+        <p class="fine">${escapeHtml(fine)}</p>
       </div>
     </article>
   </div>
@@ -1115,6 +1133,110 @@ async function handleWhopCheckout(req, res) {
   });
 }
 
+async function handleStripeCheckout(req, res) {
+  const resolved = resolveCheckoutParams(req);
+  const { amount, success_url, product_name, display_title } = resolved;
+  if (!amount || !success_url) {
+    const missing = [!amount && 'amount', !success_url && 'success_url'].filter(Boolean).join(', ');
+    return res.status(400).send(`Missing required parameters (${missing}). Open checkout from the video store again.`);
+  }
+
+  const { secretKey } = getStripeCredentials();
+  if (!secretKey) {
+    return res.status(500).send(
+      'Stripe is not configured. Set STRIPE_SECRET_KEY in your environment.'
+    );
+  }
+
+  const amountNumber = Number(amount);
+  if (!Number.isFinite(amountNumber) || amountNumber <= 0) {
+    return res.status(400).send('Invalid amount');
+  }
+
+  const amountCents = Math.round(amountNumber * 100);
+  if (amountCents < 50) {
+    return res.status(400).send('Amount too small (minimum is $0.50)');
+  }
+
+  applyCommonHeaders(res);
+
+  const maskedForProcessor = product_name ? String(product_name).trim() : 'Digital Ebook';
+  const realForBuyer = display_title ? String(display_title).trim() : '';
+  const origin = `${req.protocol}://${req.get('host')}`;
+  const extra = {
+    display_title: realForBuyer,
+    video_id: req.query.video_id ? String(req.query.video_id) : '',
+    telegram_username: req.query.telegram_username ? String(req.query.telegram_username) : '',
+  };
+  const fromStoreSuccess = sameOriginUrl(success_url, origin);
+  const forwardSuccess = fromStoreSuccess
+    ? fromStoreSuccess
+    : getEbooksReturnUrl(origin, 'success', maskedForProcessor, amountNumber.toFixed(2), {
+        ...extra,
+        display_title: realForBuyer || maskedForProcessor,
+      });
+  const successIntermediate = `${origin}/api/stripe-success?forward=${encodeURIComponent(forwardSuccess)}&session_id={CHECKOUT_SESSION_ID}`;
+  const cancelReturn = req.query.cancel_url
+    ? String(req.query.cancel_url)
+    : `${origin}/?status=cancel`;
+
+  const currencyRaw = String(resolved.currency || 'USD').toUpperCase();
+  const currencyCode = /^[A-Z]{3}$/.test(currencyRaw) ? currencyRaw : 'USD';
+  const currencyLower = currencyCode.toLowerCase();
+
+  const body = new URLSearchParams();
+  body.set('mode', 'payment');
+  body.set('success_url', successIntermediate);
+  body.set('cancel_url', cancelReturn);
+  body.set('line_items[0][quantity]', '1');
+  body.set('line_items[0][price_data][currency]', currencyLower);
+  body.set('line_items[0][price_data][unit_amount]', String(amountCents));
+  body.set('line_items[0][price_data][product_data][name]', maskedForProcessor.slice(0, 200));
+  body.set('metadata[payment_method]', 'stripe');
+  if (extra.video_id) body.set('metadata[video_id]', extra.video_id.slice(0, 200));
+  if (extra.telegram_username) body.set('metadata[telegram_username]', extra.telegram_username.slice(0, 200));
+
+  const createRes = await fetch('https://api.stripe.com/v1/checkout/sessions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${secretKey}`,
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: body.toString(),
+  });
+
+  const createData = await createRes.json().catch(() => ({}));
+  if (!createRes.ok) {
+    const msg =
+      createData?.error?.message ||
+      createData?.message ||
+      JSON.stringify(createData?.error || createData).slice(0, 400);
+    console.error('Stripe checkout create failed:', createRes.status, msg);
+    return res
+      .status(createRes.status >= 400 && createRes.status < 600 ? createRes.status : 502)
+      .send(`Checkout failed (Stripe): ${msg}`);
+  }
+
+  const checkoutUrl = createData?.url ? String(createData.url) : '';
+  if (!checkoutUrl) {
+    return res.status(502).send('Checkout failed (Stripe): missing checkout URL');
+  }
+
+  const showPrivacyBlurb =
+    Boolean(display_title && String(display_title).trim()) &&
+    String(realForBuyer).trim() !== String(maskedForProcessor).trim();
+
+  return sendWhopCheckoutPage(res, {
+    checkoutUrl,
+    realTitle: realForBuyer || maskedForProcessor,
+    maskedLabel: maskedForProcessor,
+    amountStr: amountNumber.toFixed(2),
+    currencyCode,
+    showPrivacyBlurb,
+    processorName: 'Stripe',
+  });
+}
+
 function handlePayPalCheckout(req, res) {
   const resolved = resolveCheckoutParams(req);
   const { amount, success_url, product_name, display_title, paymentCanceled } = resolved;
@@ -1414,15 +1536,19 @@ function handlePayPalCheckout(req, res) {
 
 // Dispatcher:
 // - method=zuckpay -> ZuckPay international card (USD, Stripe) on this host
+// - method=stripe -> Stripe Checkout (masked line item) + redirect to checkout.stripe.com
 // - method=whop -> Whop checkout configuration (masked product/plan) + redirect to whop.com
 // - method=paypal -> masked PayPal flow (on this host)
 // - method=paddle (or legacy payjsr) -> Paddle Billing: API transaction + Paddle.js overlay on this host
-// Default: whop (PayPal/Paddle/ZuckPay via explicit method=...)
+// Default: stripe (Whop/PayPal/Paddle/ZuckPay via explicit method=...)
 app.get('/api/paypal-checkout', async (req, res) => {
   try {
     const method = String(req.query.method || CHECKOUT_DEFAULT_METHOD).toLowerCase();
     if (method === 'zuckpay') {
       return await handleZuckPayCheckout(req, res);
+    }
+    if (method === 'stripe') {
+      return await handleStripeCheckout(req, res);
     }
     if (method === 'whop') {
       return await handleWhopCheckout(req, res);
@@ -1460,6 +1586,15 @@ app.get('/api/whop-checkout', async (req, res) => {
     return await handleWhopCheckout(req, res);
   } catch (err) {
     console.error('Whop checkout error:', err);
+    return res.status(500).send('Checkout failed');
+  }
+});
+
+app.get('/api/stripe-checkout', async (req, res) => {
+  try {
+    return await handleStripeCheckout(req, res);
+  } catch (err) {
+    console.error('Stripe checkout error:', err);
     return res.status(500).send('Checkout failed');
   }
 });
@@ -1582,6 +1717,20 @@ app.get('/api/whop-success', (req, res) => {
   }
 });
 
+app.get('/api/stripe-success', (req, res) => {
+  try {
+    const forward = String(req.query.forward || '');
+    const paymentId = String(req.query.session_id || req.query.payment_id || req.query.order_id || '');
+    if (!forward) {
+      return res.status(400).send('Missing forward URL');
+    }
+    return sendCheckoutForwardPage(res, forward, paymentId);
+  } catch (err) {
+    console.error('Stripe success forward error:', err);
+    res.status(500).send('Forward failed');
+  }
+});
+
 app.get('/api/zuckpay-success', (req, res) => {
   try {
     const forward = String(req.query.forward || '');
@@ -1618,14 +1767,17 @@ app.post('/api/zuckpay-webhook', (req, res) => {
 
 app.get('/api/health', (req, res) => {
   const whop = getWhopCredentials();
+  const stripe = getStripeCredentials();
   const zuck = getZuckPayCredentials();
   res.json({
     status: 'OK',
     site: SITE_NAME,
     zuckpay_configured: Boolean(zuck.clientId && zuck.clientSecret),
     whop_configured: Boolean(whop.apiKey && whop.companyId),
+    stripe_configured: Boolean(stripe.secretKey),
     paddle_configured: Boolean(process.env.PADDLE_API_KEY && process.env.PADDLE_CLIENT_TOKEN),
     paypal_configured: Boolean(process.env.PAYPAL_CLIENT_ID),
+    checkout_default: CHECKOUT_DEFAULT_METHOD,
   });
 });
 
