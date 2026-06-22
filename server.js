@@ -484,12 +484,103 @@ function getStripeCredentials() {
   };
 }
 
-function slugForWhop(value) {
-  return String(value || 'digital-ebook')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 48) || 'digital-ebook';
+/** Reuse Whop one-time plans by price so we do not create a new plan/link per checkout. */
+const whopPlanByPriceCache = new Map();
+const WHOP_PLAN_CACHE_TTL_MS = 15 * 60 * 1000;
+
+function whopPriceCacheKey(currencyLower, amountNumber) {
+  return `${currencyLower}:${Number(amountNumber).toFixed(2)}`;
+}
+
+function whopPriceProductSlug(currencyLower, amountNumber) {
+  return `ebook-${currencyLower}-${Number(amountNumber).toFixed(2).replace('.', '-')}`;
+}
+
+function planMatchesWhopPrice(plan, amountNumber, currencyLower) {
+  if (!plan || String(plan.plan_type || '') !== 'one_time') return false;
+  if (String(plan.currency || '').toLowerCase() !== currencyLower) return false;
+  const planPrice = Number(plan.initial_price);
+  if (!Number.isFinite(planPrice)) return false;
+  return planPrice.toFixed(2) === Number(amountNumber).toFixed(2);
+}
+
+async function whopApiJson(apiKey, apiPath, { method = 'GET', body } = {}) {
+  const res = await fetch(`https://api.whop.com/api/v1${apiPath}`, {
+    method,
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await res.json().catch(() => ({}));
+  return { ok: res.ok, status: res.status, data };
+}
+
+async function findWhopPlanByPrice(apiKey, companyId, amountNumber, currencyLower) {
+  const cacheKey = whopPriceCacheKey(currencyLower, amountNumber);
+  const cached = whopPlanByPriceCache.get(cacheKey);
+  if (cached && Date.now() - cached.at < WHOP_PLAN_CACHE_TTL_MS) {
+    return cached.planId ? cached : null;
+  }
+
+  let after = null;
+  for (let page = 0; page < 25; page++) {
+    const qs = new URLSearchParams({
+      account_id: companyId,
+      first: '100',
+    });
+    qs.append('plan_types', 'one_time');
+    if (after) qs.set('after', after);
+
+    const { ok, data } = await whopApiJson(apiKey, `/plans?${qs.toString()}`);
+    if (!ok) {
+      console.warn('Whop list plans failed:', data?.error?.message || data?.message || 'unknown');
+      break;
+    }
+
+    const plans = Array.isArray(data?.data) ? data.data : [];
+    for (const plan of plans) {
+      if (planMatchesWhopPrice(plan, amountNumber, currencyLower) && plan.id) {
+        const entry = {
+          planId: String(plan.id),
+          purchaseUrl: plan.purchase_url ? String(plan.purchase_url) : '',
+          at: Date.now(),
+        };
+        whopPlanByPriceCache.set(cacheKey, entry);
+        return entry;
+      }
+    }
+
+    const pageInfo = data?.page_info;
+    if (!pageInfo?.has_next_page || !pageInfo?.end_cursor) break;
+    after = pageInfo.end_cursor;
+  }
+
+  return null;
+}
+
+function extractWhopCheckoutLink(checkout) {
+  const planId = checkout?.plan?.id;
+  let checkoutLink = checkout?.purchase_url ? String(checkout.purchase_url) : '';
+  if (checkoutLink.startsWith('/')) checkoutLink = `https://whop.com${checkoutLink}`;
+  if (!checkoutLink && planId) checkoutLink = `https://whop.com/checkout/${planId}`;
+  return checkoutLink;
+}
+
+function rememberWhopPlan(cacheKey, checkout) {
+  const plan = checkout?.plan;
+  if (!plan?.id) return;
+  whopPlanByPriceCache.set(cacheKey, {
+    planId: String(plan.id),
+    purchaseUrl: plan.purchase_url ? String(plan.purchase_url) : '',
+    at: Date.now(),
+  });
+}
+
+async function createWhopCheckoutConfiguration(apiKey, payload) {
+  return whopApiJson(apiKey, '/checkout_configurations', { method: 'POST', body: payload });
 }
 
 function sendWhopCheckoutPage(res, payload) {
@@ -1065,56 +1156,65 @@ async function handleWhopCheckout(req, res) {
   if (extra.telegram_username) metadata.telegram_username = extra.telegram_username.slice(0, 200);
   metadata.payment_method = 'whop';
 
-  const productSlug = slugForWhop(maskedForProcessor);
-  const createPayload = {
-    mode: 'payment',
-    currency: currencyLower,
-    redirect_url: successIntermediate,
-    metadata,
-    plan: {
-      company_id: companyId,
+  const priceCacheKey = whopPriceCacheKey(currencyLower, amountNumber);
+  const existingPlan = await findWhopPlanByPrice(apiKey, companyId, amountNumber, currencyLower);
+
+  let createPayload;
+  if (existingPlan?.planId) {
+    console.log(`Whop: reusing plan ${existingPlan.planId} for ${currencyCode} ${amountNumber.toFixed(2)}`);
+    createPayload = {
+      mode: 'payment',
       currency: currencyLower,
-      plan_type: 'one_time',
-      initial_price: amountNumber,
-      force_create_new_plan: true,
-      title: maskedForProcessor.slice(0, 200),
-      description: 'Digital access — unlocked instantly after payment confirmation.',
-      visibility: 'hidden',
-      product: {
-        external_identifier: `ebook-${productSlug}`,
-        title: maskedForProcessor.slice(0, 200),
-        description: 'Digital ebook and educational content.',
+      redirect_url: successIntermediate,
+      metadata,
+      plan_id: existingPlan.planId,
+    };
+  } else {
+    const priceProductSlug = whopPriceProductSlug(currencyLower, amountNumber);
+    console.log(`Whop: creating plan for ${currencyCode} ${amountNumber.toFixed(2)} (${priceProductSlug})`);
+    createPayload = {
+      mode: 'payment',
+      currency: currencyLower,
+      redirect_url: successIntermediate,
+      metadata,
+      plan: {
+        company_id: companyId,
+        currency: currencyLower,
+        plan_type: 'one_time',
+        initial_price: amountNumber,
+        force_create_new_plan: false,
+        title: 'Digital Ebook',
+        description: 'Digital access — unlocked instantly after payment confirmation.',
         visibility: 'hidden',
-        redirect_purchase_url: successIntermediate,
+        product: {
+          external_identifier: priceProductSlug,
+          title: 'Digital Ebook',
+          description: 'Digital ebook and educational content.',
+          visibility: 'hidden',
+          redirect_purchase_url: successIntermediate,
+        },
       },
-    },
-  };
+    };
+  }
 
-  const createRes = await fetch('https://api.whop.com/api/v1/checkout_configurations', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-      Accept: 'application/json',
-    },
-    body: JSON.stringify(createPayload),
-  });
-
-  const createData = await createRes.json().catch(() => ({}));
-  if (!createRes.ok) {
+  const { ok: createOk, status: createStatus, data: createData } = await createWhopCheckoutConfiguration(
+    apiKey,
+    createPayload
+  );
+  if (!createOk) {
     const msg =
       createData?.error?.message ||
       createData?.message ||
       JSON.stringify(createData?.error || createData).slice(0, 400);
-    console.error('Whop checkout create failed:', createRes.status, msg);
-    return res.status(createRes.status >= 400 && createRes.status < 600 ? createRes.status : 502).send(`Checkout failed (Whop): ${msg}`);
+    console.error('Whop checkout create failed:', createStatus, msg);
+    return res
+      .status(createStatus >= 400 && createStatus < 600 ? createStatus : 502)
+      .send(`Checkout failed (Whop): ${msg}`);
   }
 
   const checkout = createData?.data || createData;
-  const planId = checkout?.plan?.id;
-  let checkoutLink = checkout?.purchase_url ? String(checkout.purchase_url) : '';
-  if (checkoutLink.startsWith('/')) checkoutLink = `https://whop.com${checkoutLink}`;
-  if (!checkoutLink && planId) checkoutLink = `https://whop.com/checkout/${planId}`;
+  rememberWhopPlan(priceCacheKey, checkout);
+  const checkoutLink = extractWhopCheckoutLink(checkout);
   if (!checkoutLink) {
     return res.status(502).send('Checkout failed (Whop): missing checkout URL');
   }
