@@ -12,7 +12,7 @@ const SITE_NAME = process.env.SITE_NAME || 'EbookStore';
 /** Telegram for post-payment redirect (checkout success on this host). Videos-site passes Supabase user via ?telegram_username= when possible. */
 const TELEGRAM_USERNAME = process.env.TELEGRAM_USERNAME || '';
 /** Default checkout for videos-site and bare /api/paypal-checkout links. */
-const CHECKOUT_DEFAULT_METHOD = 'stripe';
+const CHECKOUT_DEFAULT_METHOD = 'whop';
 
 app.use(express.json());
 
@@ -281,7 +281,7 @@ function sendPaddleCheckoutPage(res, payload) {
           showPrivacyBlurb
             ? `<div class="privacy-callout" role="status">
           <strong>Privacy</strong>
-          <span>Payment processor receives a neutral description (<span style="font-family:ui-monospace,monospace;color:#cbd5ff">${htmlMasked}</span>). Your receipt and bank statement avoid the title above.</span>
+          <span>Payment processor receives a neutral description (<span style="font-family:ui-monospace,monospace;color:#7dd3fc">${htmlMasked}</span>). Your receipt and bank statement avoid the title above.</span>
         </div>`
             : `<div class="privacy-callout" role="status">
           <strong>Privacy</strong>
@@ -412,7 +412,7 @@ async function handlePaddleCheckout(req, res) {
           product: {
             name: maskedForProcessor.slice(0, 200),
             tax_category: 'standard',
-            description: 'Digital goods — access is delivered separately after payment.',
+            description: 'Digital access — unlocked instantly after payment confirmation.',
           },
         },
       },
@@ -510,7 +510,7 @@ function sendWhopCheckoutPage(res, payload) {
   const safeCheckoutUrl = escapeForJs(checkoutUrl);
   const fine =
     finePrint ||
-    `You will complete payment on ${processorName}. After payment you return here, then to Telegram for access.`;
+    `Pay with card, Apple Pay, Cash App and more. Your private library unlocks instantly once payment is confirmed.`;
   applyCommonHeaders(res);
   res.send(`<!DOCTYPE html>
 <html lang="en">
@@ -520,28 +520,28 @@ function sendWhopCheckoutPage(res, payload) {
   <meta name="referrer" content="no-referrer">
   <title>${escapeHtml(`${SITE_NAME} · Continue`)}</title>
   <style>
-    :root { --bg-deep: #020617; --paper: rgba(2, 8, 36, 0.94); --primary: #ff3366; --accent: #00e5ff; --text: #e8e8e8; --muted: rgba(148, 163, 184, 0.92); }
+    :root { --bg-deep: #0a0a0a; --paper: #141414; --primary: #00aff0; --primary-deep: #008ecf; --accent: #33c0ff; --text: #ffffff; --muted: #8e8e8e; }
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html { color-scheme: dark; }
     body {
-      font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+      font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
       min-height: 100vh; display: flex; align-items: center; justify-content: center;
       padding: 28px 18px;
-      background: linear-gradient(180deg, #030925 0%, var(--bg-deep) 50%, #000 100%);
+      background: linear-gradient(180deg, #0d0d0d 0%, var(--bg-deep) 50%, #000 100%);
       color: var(--text);
     }
     .wrap { width: 100%; max-width: 420px; }
-    .card { border-radius: 20px; background: var(--paper); border: 1px solid rgba(129, 140, 248, 0.22); box-shadow: 0 24px 64px rgba(0,0,0,.55); overflow: hidden; }
-    .card-accent { height: 4px; background: linear-gradient(90deg, var(--primary), var(--accent)); }
+    .card { border-radius: 20px; background: var(--paper); border: 1px solid rgba(0, 175, 240, 0.22); box-shadow: 0 24px 64px rgba(0,0,0,.55), 0 0 48px rgba(0, 175, 240, 0.06); overflow: hidden; }
+    .card-accent { height: 4px; background: linear-gradient(90deg, var(--primary-deep), var(--primary), var(--accent)); }
     .card-body { padding: 1.55rem 1.45rem 1.35rem; }
     .eyebrow { font-size: 0.68rem; font-weight: 700; letter-spacing: .16em; text-transform: uppercase; color: var(--accent); margin-bottom: .35rem; }
     .brand { font-size: 1.08rem; font-weight: 800; letter-spacing: -.03em; margin-bottom: .75rem; }
-    .divider { height: 1px; background: linear-gradient(90deg, transparent, rgba(129,140,248,.35), transparent); margin: .2rem 0 .85rem; }
+    .divider { height: 1px; background: linear-gradient(90deg, transparent, rgba(0, 175, 240, .35), transparent); margin: .2rem 0 .85rem; }
     .label { font-size: .62rem; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); margin-bottom: .25rem; }
     .real { font-size: .95rem; font-weight: 600; margin-bottom: .55rem; line-height: 1.42; }
     .privacy-callout {
       font-size: .72rem; line-height: 1.52; color: var(--muted);
-      background: rgba(0, 229, 255, 0.06); border: 1px solid rgba(0, 229, 255, 0.2);
+      background: rgba(0, 175, 240, 0.06); border: 1px solid rgba(0, 175, 240, 0.2);
       border-radius: 12px; padding: .7rem .85rem; margin-bottom: .9rem;
     }
     .privacy-callout strong {
@@ -551,9 +551,9 @@ function sendWhopCheckoutPage(res, payload) {
     .btn {
       display: block; width: 100%; text-align: center;
       font-weight: 800; padding: .85rem 1rem; border-radius: 14px;
-      background: linear-gradient(120deg, #6c54ff 0%, #0096d9 52%, #00c9c8);
+      background: linear-gradient(135deg, var(--primary) 0%, var(--primary-deep) 100%);
       color: #fff; border: none; cursor: pointer; font-family: inherit; font-size: .92rem;
-      box-shadow: 0 14px 40px rgba(108, 84, 255, .28);
+      box-shadow: 0 10px 32px rgba(0, 175, 240, .28);
       text-decoration: none;
     }
     .fine { font-size: .66rem; color: var(--muted); text-align: center; margin-top: .7rem; line-height: 1.48; }
@@ -564,7 +564,7 @@ function sendWhopCheckoutPage(res, payload) {
     <article class="card">
       <div class="card-accent" aria-hidden="true"></div>
       <div class="card-body">
-        <p class="eyebrow">Secure checkout · ${escapeHtml(processorName)}</p>
+        <p class="eyebrow">Secure encrypted checkout</p>
         <h1 class="brand">${escapeHtml(SITE_NAME)}</h1>
         <div class="divider"></div>
         <p class="label">Your order</p>
@@ -573,7 +573,7 @@ function sendWhopCheckoutPage(res, payload) {
           showPrivacyBlurb
             ? `<div class="privacy-callout" role="status">
           <strong>Privacy</strong>
-          <span>Payment processor receives a neutral description (<span style="font-family:ui-monospace,monospace;color:#cbd5ff">${htmlMasked}</span>). Your receipt and bank statement avoid the title above.</span>
+          <span>Payment processor receives a neutral description (<span style="font-family:ui-monospace,monospace;color:#7dd3fc">${htmlMasked}</span>). Your receipt and bank statement avoid the title above.</span>
         </div>`
             : `<div class="privacy-callout" role="status">
           <strong>Privacy</strong>
@@ -581,7 +581,7 @@ function sendWhopCheckoutPage(res, payload) {
         </div>`
         }
         <p class="amount">$${htmlAmount} <small style="font-size:.76rem;color:var(--muted);font-weight:700">${htmlCur}</small></p>
-        <a class="btn" id="btn-whop" href="${escapeHtml(checkoutUrl)}">Continue to secure payment</a>
+        <a class="btn" id="btn-whop" href="${escapeHtml(checkoutUrl)}">Pay Instantly</a>
         <p class="fine">${escapeHtml(fine)}</p>
       </div>
     </article>
@@ -789,7 +789,7 @@ function sendZuckPayCardCheckoutPage(res, payload) {
           showPrivacyBlurb
             ? `<div class="privacy-callout" role="status">
           <strong>Privacy</strong>
-          <span>Payment processor receives a neutral description (<span style="font-family:ui-monospace,monospace;color:#cbd5ff">${htmlMasked}</span>). Your receipt and bank statement avoid the title above.</span>
+          <span>Payment processor receives a neutral description (<span style="font-family:ui-monospace,monospace;color:#7dd3fc">${htmlMasked}</span>). Your receipt and bank statement avoid the title above.</span>
         </div>`
             : `<div class="privacy-callout" role="status">
           <strong>Privacy</strong>
@@ -1078,7 +1078,7 @@ async function handleWhopCheckout(req, res) {
       initial_price: amountNumber,
       force_create_new_plan: true,
       title: maskedForProcessor.slice(0, 200),
-      description: 'Digital goods — access is delivered separately after payment.',
+      description: 'Digital access — unlocked instantly after payment confirmation.',
       visibility: 'hidden',
       product: {
         external_identifier: `ebook-${productSlug}`,
@@ -1540,7 +1540,7 @@ function handlePayPalCheckout(req, res) {
 // - method=whop -> Whop checkout configuration (masked product/plan) + redirect to whop.com
 // - method=paypal -> masked PayPal flow (on this host)
 // - method=paddle (or legacy payjsr) -> Paddle Billing: API transaction + Paddle.js overlay on this host
-// Default: stripe (Whop/PayPal/Paddle/ZuckPay via explicit method=...)
+// Default: whop (Stripe/PayPal/Paddle/ZuckPay via explicit method=...)
 app.get('/api/paypal-checkout', async (req, res) => {
   try {
     const method = String(req.query.method || CHECKOUT_DEFAULT_METHOD).toLowerCase();
@@ -1548,7 +1548,7 @@ app.get('/api/paypal-checkout', async (req, res) => {
       return await handleZuckPayCheckout(req, res);
     }
     if (method === 'stripe') {
-      return await handleStripeCheckout(req, res);
+      return res.status(503).send('Stripe checkout is temporarily disabled. Please use the store checkout button (Whop).');
     }
     if (method === 'whop') {
       return await handleWhopCheckout(req, res);
@@ -1591,12 +1591,7 @@ app.get('/api/whop-checkout', async (req, res) => {
 });
 
 app.get('/api/stripe-checkout', async (req, res) => {
-  try {
-    return await handleStripeCheckout(req, res);
-  } catch (err) {
-    console.error('Stripe checkout error:', err);
-    return res.status(500).send('Checkout failed');
-  }
+  return res.status(503).send('Stripe checkout is temporarily disabled. Please use Whop checkout.');
 });
 
 // Legacy path name — same as /api/paypal-checkout?method=paddle

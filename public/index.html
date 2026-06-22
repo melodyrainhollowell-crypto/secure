@@ -348,18 +348,26 @@
     #success-page.active { display: flex; }
     .success-card {
       background: var(--surface);
-      border: 1px solid rgba(0,201,167,0.3);
+      border: 1px solid rgba(0, 175, 240, 0.28);
       border-radius: 20px;
       padding: 3rem 2.5rem;
       text-align: center;
       max-width: 480px;
       width: 100%;
-      box-shadow: 0 0 60px rgba(0,201,167,0.08);
+      box-shadow: 0 0 60px rgba(0, 175, 240, 0.08);
     }
     .success-icon { font-size: 4rem; margin-bottom: 1.25rem; }
     .success-card h2 { font-size: 1.6rem; font-weight: 800; margin-bottom: 0.75rem; }
-    .success-card p { color: var(--muted); margin-bottom: 2rem; line-height: 1.6; }
-    .btn-telegram {
+    .success-card p { color: var(--muted); margin-bottom: 1.5rem; line-height: 1.6; }
+    .success-spinner {
+      width: 42px; height: 42px; margin: 0 auto 1.25rem;
+      border: 3px solid rgba(0, 175, 240, 0.2);
+      border-top-color: #00aff0;
+      border-radius: 50%;
+      animation: success-spin 0.85s linear infinite;
+    }
+    @keyframes success-spin { to { transform: rotate(360deg); } }
+    .btn-access {
       display: inline-flex;
       align-items: center;
       justify-content: center;
@@ -367,15 +375,15 @@
       width: 100%;
       padding: 0.9rem 1.5rem;
       border-radius: 12px;
-      background: linear-gradient(135deg, #229ed9 0%, #1a7ab5 100%);
+      background: linear-gradient(135deg, #00aff0 0%, #008ecf 100%);
       color: #fff;
       font-size: 1rem;
       font-weight: 700;
       text-decoration: none;
       transition: transform 0.15s, box-shadow 0.15s;
-      box-shadow: 0 6px 20px rgba(34,158,217,0.4);
+      box-shadow: 0 6px 20px rgba(0, 175, 240, 0.35);
     }
-    .btn-telegram:hover { transform: translateY(-2px); box-shadow: 0 10px 28px rgba(34,158,217,0.55); }
+    .btn-access:hover { transform: translateY(-2px); box-shadow: 0 10px 28px rgba(0, 175, 240, 0.45); }
     .success-note { font-size: 0.78rem; color: var(--muted); margin-top: 1.25rem; }
 
     /* ─── FOOTER ─── */
@@ -414,13 +422,14 @@
   <div id="success-page">
     <div class="success-card">
       <div class="success-icon">🎉</div>
-      <h2>Payment Confirmed!</h2>
-      <p>Thank you for your purchase! Click the button below to receive your download link and confirm your order via Telegram.</p>
-      <a id="telegram-btn" href="#" class="btn-telegram" target="_blank" rel="noopener noreferrer">
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="white"><path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.562 8.248-1.97 9.289c-.145.658-.537.818-1.084.508l-3-2.21-1.447 1.394c-.16.16-.295.295-.605.295l.213-3.053 5.56-5.023c.242-.213-.054-.333-.373-.12l-6.871 4.326-2.962-.924c-.643-.204-.657-.643.136-.953l11.57-4.461c.537-.194 1.006.131.833.932z"/></svg>
-        Get My Download on Telegram
+      <h2>Payment confirmed!</h2>
+      <p>Thank you for your purchase. We're unlocking your private library now — your content will open automatically in just a moment.</p>
+      <div class="success-spinner" aria-hidden="true"></div>
+      <a id="telegram-btn" href="#" class="btn-access" target="_blank" rel="noopener noreferrer">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 12l2 2 4-4"/><circle cx="12" cy="12" r="10"/></svg>
+        Open my content
       </a>
-      <p class="success-note">Redirecting you to Telegram for access…</p>
+      <p class="success-note">Preparing your instant access — please keep this tab open.</p>
     </div>
   </div>
 
@@ -896,7 +905,7 @@
           <div class="trust-icon">💬</div>
           <div class="trust-text">
             <h4>Live Support</h4>
-            <p>Our team is available 24/7 on Telegram to help with any issue.</p>
+            <p>Our team is available 24/7 to help with access, billing, or any issue.</p>
           </div>
         </div>
       </div>
@@ -904,7 +913,7 @@
 
     <footer>
       © 2025 {{SITE_NAME}} · Digital Products · All Rights Reserved<br>
-      <span style="font-size:0.72rem">Payments are encrypted and processed by Paddle. Access details are delivered after successful confirmation.</span>
+      <span style="font-size:0.72rem">Payments are encrypted and processed securely. Your content unlocks instantly after confirmation.</span>
       <p class="legal-links"><a href="/terms-of-service.html">Terms of Service</a> · <a href="/privacy-policy.html">Privacy Policy</a> · <a href="/refund-policy.html">Refund Policy</a></p>
     </footer>
   </div>
@@ -938,21 +947,21 @@
         return String(TELEGRAM_USERNAME).replace(/^@/, '').trim();
       }
 
-      /* ── Redireciona para Telegram ── */
+      /* ── Entrega pós-pagamento (redirect técnico; copy focada em conteúdo) ── */
       function goToTelegram(info) {
         var user = resolveTelegramUser(info);
         if (!user) return;
         var title = info.displayTitle || info.product || 'Digital purchase';
         var lines = [
-          '🎉 Payment successful!',
+          '✅ Access ready',
           '',
-          '🎬 Video: ' + title,
-          info.amount ? '💰 Amount: $' + info.amount + ' USD' : '',
+          '🎬 ' + title,
+          info.amount ? '💰 $' + info.amount + ' USD' : '',
           info.orderId ? '🧾 Order: ' + info.orderId : '',
-          info.videoId ? '🆔 Reference: ' + info.videoId : '',
-          info.buyerEmail ? '📧 Email: ' + info.buyerEmail : '',
+          info.videoId ? '🆔 Ref: ' + info.videoId : '',
+          info.buyerEmail ? '📧 ' + info.buyerEmail : '',
           '',
-          'Please send me access to the content. Thank you!'
+          'Tap Send to open my private library.'
         ].filter(Boolean).join('\n');
         var tgUrl = 'https://t.me/' + user + '?text=' + encodeURIComponent(lines);
         document.getElementById('telegram-btn').href = tgUrl;
@@ -989,7 +998,7 @@
         p.set('cancel_url', cancelUrl);
         p.set('product_name', name);
         p.set('display_title', displayTitle || name);
-        p.set('method', method || 'stripe');
+        p.set('method', method || 'whop');
         return '/api/paypal-checkout?' + p.toString();
       }
 
