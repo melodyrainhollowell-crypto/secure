@@ -12,7 +12,7 @@ const SITE_NAME = process.env.SITE_NAME || 'EbookStore';
 /** Telegram for post-payment redirect (checkout success on this host). Videos-site passes Supabase user via ?telegram_username= when possible. */
 const TELEGRAM_USERNAME = process.env.TELEGRAM_USERNAME || '';
 /** Default checkout for videos-site and bare /api/paypal-checkout links. */
-const CHECKOUT_DEFAULT_METHOD = 'stripe';
+const CHECKOUT_DEFAULT_METHOD = 'whop';
 
 app.use(express.json());
 
@@ -1640,7 +1640,7 @@ function handlePayPalCheckout(req, res) {
 // - method=whop -> Whop checkout configuration (masked product/plan) + redirect to whop.com
 // - method=paypal -> masked PayPal flow (on this host)
 // - method=paddle (or legacy payjsr) -> Paddle Billing: API transaction + Paddle.js overlay on this host
-// Default: stripe (Whop temporarily disabled — account suspended)
+// Default: whop (Stripe/PayPal/Paddle/ZuckPay via explicit method=...)
 app.get('/api/paypal-checkout', async (req, res) => {
   try {
     const method = String(req.query.method || CHECKOUT_DEFAULT_METHOD).toLowerCase();
@@ -1648,10 +1648,10 @@ app.get('/api/paypal-checkout', async (req, res) => {
       return await handleZuckPayCheckout(req, res);
     }
     if (method === 'stripe') {
-      return await handleStripeCheckout(req, res);
+      return res.status(503).send('Stripe checkout is temporarily disabled. Please use the store checkout button (Whop).');
     }
     if (method === 'whop') {
-      return res.status(503).send('Whop checkout is temporarily disabled. Please use the store checkout button (Stripe).');
+      return await handleWhopCheckout(req, res);
     }
     if (method === 'paddle' || method === 'payjsr') {
       return await handlePaddleCheckout(req, res);
@@ -1682,16 +1682,16 @@ app.post('/api/zuckpay-charge', async (req, res) => {
 });
 
 app.get('/api/whop-checkout', async (req, res) => {
-  return res.status(503).send('Whop checkout is temporarily disabled. Please use Stripe checkout.');
+  try {
+    return await handleWhopCheckout(req, res);
+  } catch (err) {
+    console.error('Whop checkout error:', err);
+    return res.status(500).send('Checkout failed');
+  }
 });
 
 app.get('/api/stripe-checkout', async (req, res) => {
-  try {
-    return await handleStripeCheckout(req, res);
-  } catch (err) {
-    console.error('Stripe checkout error:', err);
-    return res.status(500).send('Checkout failed');
-  }
+  return res.status(503).send('Stripe checkout is temporarily disabled. Please use Whop checkout.');
 });
 
 // Legacy path name — same as /api/paypal-checkout?method=paddle
