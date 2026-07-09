@@ -290,7 +290,7 @@ function sendPaddleCheckoutPage(res, payload) {
         }
         <p class="amount">$${htmlAmount} <small style="font-size:.76rem;color:var(--muted);font-weight:700">${htmlCur}</small></p>
         <button type="button" class="btn" id="btn-paddle">Open secure payment</button>
-        <p class="fine">Checkout opens in a secure overlay. If nothing appears, tap the button again or disable strict blockers for this page.</p>
+        <p class="fine">Read the privacy notice above, then tap the button to open secure payment. If nothing appears, tap again or disable strict blockers for this page.</p>
       </div>
     </article>
   </div>
@@ -332,9 +332,6 @@ function sendPaddleCheckoutPage(res, payload) {
         }
       }
       document.getElementById('btn-paddle').addEventListener('click', function () {
-        bootPaddle(openCheckout);
-      });
-      window.addEventListener('load', function () {
         bootPaddle(openCheckout);
       });
     })();
@@ -601,7 +598,7 @@ function sendWhopCheckoutPage(res, payload) {
   const safeCheckoutUrl = escapeForJs(checkoutUrl);
   const fine =
     finePrint ||
-    `Pay with card, Apple Pay, Cash App and more. Your private library unlocks instantly once payment is confirmed.`;
+    `Review the discreet billing description above, then tap Pay Instantly when you are ready. Your private library unlocks instantly once payment is confirmed.`;
   applyCommonHeaders(res);
   res.send(`<!DOCTYPE html>
 <html lang="en">
@@ -684,9 +681,6 @@ function sendWhopCheckoutPage(res, payload) {
       if (btn) btn.addEventListener('click', function (e) {
         e.preventDefault();
         window.location.href = CHECKOUT_URL;
-      });
-      window.addEventListener('load', function () {
-        setTimeout(function () { window.location.href = CHECKOUT_URL; }, 350);
       });
     })();
   </script>
