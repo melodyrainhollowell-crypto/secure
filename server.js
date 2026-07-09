@@ -1124,7 +1124,7 @@ async function handleWhopCheckout(req, res) {
 
   applyCommonHeaders(res);
 
-  const maskedForProcessor = product_name ? String(product_name).trim() : 'Digital Ebook';
+  const maskedForProcessor = 'Digital Ebook';
   const realForBuyer = display_title ? String(display_title).trim() : '';
   const origin = `${req.protocol}://${req.get('host')}`;
   const extra = {
