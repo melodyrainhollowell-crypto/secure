@@ -14,6 +14,217 @@ const TELEGRAM_USERNAME = process.env.TELEGRAM_USERNAME || '';
 /** Default checkout for videos-site and bare /api/paypal-checkout links. */
 const CHECKOUT_DEFAULT_METHOD = 'whop';
 
+/** Shared light theme for all in-app checkout pages (matches videos/ebooks storefront). */
+const CHECKOUT_UI_CSS = `
+    :root {
+      --bg: #ffffff;
+      --bg-deep: #ffffff;
+      --bg-mid: #ffffff;
+      --paper: #ffffff;
+      --paper-border: #e5e7eb;
+      --surface: #f7f8fa;
+      --primary: #0b6bcb;
+      --primary-hover: #0958a8;
+      --primary-deep: #0958a8;
+      --accent: #0b6bcb;
+      --text: #111827;
+      --muted: #6b7280;
+      --muted2: #6b7280;
+      --border: #e5e7eb;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html { color-scheme: light; }
+    body {
+      font-family: 'DM Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 28px 18px;
+      background: var(--bg);
+      color: var(--text);
+      position: relative;
+      overflow-x: hidden;
+    }
+    .ambient { display: none; }
+    .wrap { width: 100%; max-width: 420px; position: relative; z-index: 1; }
+    .card {
+      border-radius: 12px;
+      background: var(--paper);
+      border: 1px solid var(--border);
+      box-shadow: 0 8px 30px rgba(0, 0, 0, 0.06);
+      overflow: hidden;
+    }
+    .card-accent { height: 3px; width: 100%; background: var(--primary); }
+    .card-body { padding: 1.45rem 1.35rem 1.25rem; }
+    .eyebrow {
+      font-size: 0.68rem;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--primary);
+      margin-bottom: 0.3rem;
+    }
+    .brand {
+      font-size: 1.15rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      color: var(--text);
+      margin-bottom: 0.65rem;
+    }
+    .badge {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.78rem;
+      color: var(--muted);
+      margin-bottom: 0.85rem;
+    }
+    .divider {
+      height: 1px;
+      background: var(--border);
+      margin: 0.15rem 0 0.85rem;
+    }
+    .cancel-banner {
+      font-size: 0.82rem;
+      line-height: 1.45;
+      color: #92400e;
+      background: #fffbeb;
+      border: 1px solid #fde68a;
+      border-radius: 8px;
+      padding: 0.65rem 0.75rem;
+      margin-bottom: 0.85rem;
+    }
+    .label {
+      font-size: 0.62rem;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 0.25rem;
+    }
+    .real, .product, .product-real {
+      font-size: 0.95rem;
+      font-weight: 600;
+      margin-bottom: 0.55rem;
+      line-height: 1.42;
+      color: var(--text);
+    }
+    .privacy-callout {
+      font-size: 0.72rem;
+      line-height: 1.52;
+      color: var(--muted);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.7rem 0.85rem;
+      margin-bottom: 0.9rem;
+    }
+    .privacy-callout strong {
+      display: block;
+      font-size: 0.65rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--text);
+      margin-bottom: 0.35rem;
+    }
+    .privacy-p { margin: 0; }
+    .paypal-label {
+      font-family: ui-monospace, Consolas, monospace;
+      font-size: 0.88em;
+      color: var(--primary);
+      word-break: break-word;
+    }
+    .amount {
+      font-size: 1.85rem;
+      font-weight: 700;
+      color: var(--primary);
+      margin-bottom: 1rem;
+      letter-spacing: -0.03em;
+    }
+    .amount .cur-symbol { font-size: 1.15rem; margin-right: 1px; }
+    .amount .cur-code {
+      font-size: 0.78rem;
+      font-weight: 600;
+      color: var(--muted);
+      margin-left: 6px;
+    }
+    .field { margin-bottom: 0.75rem; }
+    .field label {
+      display: block;
+      font-size: 0.68rem;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 0.35rem;
+    }
+    .field input {
+      width: 100%;
+      padding: 0.7rem 0.8rem;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text);
+      font: inherit;
+    }
+    #card-element {
+      padding: 0.75rem 0.8rem;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+    }
+    #card-errors { font-size: 0.74rem; color: #dc2626; min-height: 1.1rem; margin-top: 0.45rem; }
+    .btn {
+      display: block;
+      width: 100%;
+      text-align: center;
+      font-weight: 700;
+      padding: 0.85rem 1rem;
+      border-radius: 8px;
+      margin-top: 0;
+      background: var(--primary);
+      color: #fff;
+      border: none;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 0.92rem;
+      text-decoration: none;
+      box-shadow: none;
+    }
+    .btn:hover { background: var(--primary-hover); }
+    .btn:disabled { opacity: 0.55; cursor: not-allowed; }
+    .pp-wrap {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1rem 0.95rem 1.05rem;
+    }
+    .pp-label {
+      font-size: 0.76rem;
+      font-weight: 600;
+      color: var(--muted);
+      text-align: center;
+      margin-bottom: 0.6rem;
+    }
+    #paypal-button-container { min-height: 48px; }
+    #loading { text-align: center; font-size: 0.78rem; color: var(--muted); margin-top: 0.7rem; }
+    .fine {
+      font-size: 0.72rem;
+      color: var(--muted);
+      text-align: center;
+      margin-top: 0.7rem;
+      line-height: 1.48;
+    }
+    .back {
+      display: block;
+      text-align: center;
+      margin-top: 0.55rem;
+      font-size: 0.72rem;
+      color: var(--muted);
+    }
+`;
+
 app.use(express.json());
 
 function isCheckoutQuery(q) {
@@ -221,58 +432,14 @@ function sendPaddleCheckoutPage(res, payload) {
   <meta http-equiv="Referrer-Policy" content="no-referrer">
   <title>${escapeHtml(`${SITE_NAME} · Continue`)}</title>
   <script src="https://cdn.paddle.com/paddle/v2/paddle.js"></script>
-  <style>
-    :root { --bg-deep: #020617; --paper: rgba(2, 8, 36, 0.94); --primary: #ff3366; --accent: #00e5ff; --text: #e8e8e8; --muted: rgba(148, 163, 184, 0.92); }
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    html { color-scheme: dark; }
-    body {
-      font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
-      min-height: 100vh;
-      display: flex; align-items: center; justify-content: center;
-      padding: 28px 18px;
-      background: linear-gradient(180deg, #030925 0%, var(--bg-deep) 50%, #000 100%);
-      color: var(--text);
-    }
-    .wrap { width: 100%; max-width: 420px; }
-    .card {
-      border-radius: 20px; background: var(--paper);
-      border: 1px solid rgba(129, 140, 248, 0.22);
-      box-shadow: 0 24px 64px rgba(0,0,0,.55); overflow: hidden;
-    }
-    .card-accent { height: 4px; background: linear-gradient(90deg, var(--primary), var(--accent)); }
-    .card-body { padding: 1.55rem 1.45rem 1.35rem; }
-    .eyebrow { font-size: 0.68rem; font-weight: 700; letter-spacing: .16em; text-transform: uppercase; color: var(--accent); margin-bottom: .35rem; }
-    .brand { font-size: 1.08rem; font-weight: 800; letter-spacing: -.03em; margin-bottom: .75rem; }
-    .divider { height: 1px; background: linear-gradient(90deg, transparent, rgba(129,140,248,.35), transparent); margin: .2rem 0 .85rem; }
-    .label { font-size: .62rem; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); margin-bottom: .25rem; }
-    .real { font-size: .95rem; font-weight: 600; margin-bottom: .55rem; line-height: 1.42; }
-    .privacy-callout {
-      font-size: .72rem; line-height: 1.52; color: var(--muted);
-      background: rgba(0, 229, 255, 0.06); border: 1px solid rgba(0, 229, 255, 0.2);
-      border-radius: 12px; padding: .7rem .85rem; margin-bottom: .9rem;
-    }
-    .privacy-callout strong {
-      display: block; font-size: .65rem; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); margin-bottom: .35rem;
-    }
-    .amount { font-size: 1.95rem; font-weight: 800; color: var(--primary); margin-bottom: 1rem; letter-spacing: -.04em; }
-    .btn {
-      display: block; width: 100%; text-align: center;
-      font-weight: 800; padding: .85rem 1rem; border-radius: 14px;
-      background: linear-gradient(120deg, #6c54ff 0%, #0096d9 52%, #00c9c8);
-      color: #fff; border: none; cursor: pointer; font-family: inherit; font-size: .92rem;
-      box-shadow: 0 14px 40px rgba(108, 84, 255, .28);
-      transition: transform .15s, filter .15s;
-    }
-    .btn:hover { transform: translateY(-1px); filter: brightness(1.06); }
-    .fine { font-size: .66rem; color: var(--muted); text-align: center; margin-top: .7rem; line-height: 1.48; word-break: break-word; }
-  </style>
+  <style>${CHECKOUT_UI_CSS}</style>
 </head>
 <body>
   <div class="wrap">
     <article class="card">
       <div class="card-accent" aria-hidden="true"></div>
       <div class="card-body">
-        <p class="eyebrow">Secure checkout · Paddle</p>
+        <p class="eyebrow">Checkout</p>
         <h1 class="brand">${escapeHtml(SITE_NAME)}</h1>
         <div class="divider"></div>
         <p class="label">Your order</p>
@@ -281,7 +448,7 @@ function sendPaddleCheckoutPage(res, payload) {
           showPrivacyBlurb
             ? `<div class="privacy-callout" role="status">
           <strong>Privacy</strong>
-          <span>Payment processor receives a neutral description (<span style="font-family:ui-monospace,monospace;color:#7dd3fc">${htmlMasked}</span>). Your receipt and bank statement avoid the title above.</span>
+          <span>Payment processor receives a neutral description (<span style="font-family:ui-monospace,monospace;color:var(--primary)">${htmlMasked}</span>). Your receipt and bank statement avoid the title above.</span>
         </div>`
             : `<div class="privacy-callout" role="status">
           <strong>Privacy</strong>
@@ -289,8 +456,8 @@ function sendPaddleCheckoutPage(res, payload) {
         </div>`
         }
         <p class="amount">$${htmlAmount} <small style="font-size:.76rem;color:var(--muted);font-weight:700">${htmlCur}</small></p>
-        <button type="button" class="btn" id="btn-paddle">Open secure payment</button>
-        <p class="fine">Read the privacy notice above, then tap the button to open secure payment. If nothing appears, tap again or disable strict blockers for this page.</p>
+        <button type="button" class="btn" id="btn-paddle">Pay and receive</button>
+        <p class="fine">You will receive access automatically after payment.</p>
       </div>
     </article>
   </div>
@@ -598,7 +765,7 @@ function sendWhopCheckoutPage(res, payload) {
   const safeCheckoutUrl = escapeForJs(checkoutUrl);
   const fine =
     finePrint ||
-    `Review the discreet billing description above, then tap Pay Instantly when you are ready. Your private library unlocks instantly once payment is confirmed.`;
+    `You will receive access automatically after payment.`;
   applyCommonHeaders(res);
   res.send(`<!DOCTYPE html>
 <html lang="en">
@@ -607,52 +774,14 @@ function sendWhopCheckoutPage(res, payload) {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="referrer" content="no-referrer">
   <title>${escapeHtml(`${SITE_NAME} · Continue`)}</title>
-  <style>
-    :root { --bg-deep: #0a0a0a; --paper: #141414; --primary: #00aff0; --primary-deep: #008ecf; --accent: #33c0ff; --text: #ffffff; --muted: #8e8e8e; }
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    html { color-scheme: dark; }
-    body {
-      font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
-      min-height: 100vh; display: flex; align-items: center; justify-content: center;
-      padding: 28px 18px;
-      background: linear-gradient(180deg, #0d0d0d 0%, var(--bg-deep) 50%, #000 100%);
-      color: var(--text);
-    }
-    .wrap { width: 100%; max-width: 420px; }
-    .card { border-radius: 20px; background: var(--paper); border: 1px solid rgba(0, 175, 240, 0.22); box-shadow: 0 24px 64px rgba(0,0,0,.55), 0 0 48px rgba(0, 175, 240, 0.06); overflow: hidden; }
-    .card-accent { height: 4px; background: linear-gradient(90deg, var(--primary-deep), var(--primary), var(--accent)); }
-    .card-body { padding: 1.55rem 1.45rem 1.35rem; }
-    .eyebrow { font-size: 0.68rem; font-weight: 700; letter-spacing: .16em; text-transform: uppercase; color: var(--accent); margin-bottom: .35rem; }
-    .brand { font-size: 1.08rem; font-weight: 800; letter-spacing: -.03em; margin-bottom: .75rem; }
-    .divider { height: 1px; background: linear-gradient(90deg, transparent, rgba(0, 175, 240, .35), transparent); margin: .2rem 0 .85rem; }
-    .label { font-size: .62rem; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); margin-bottom: .25rem; }
-    .real { font-size: .95rem; font-weight: 600; margin-bottom: .55rem; line-height: 1.42; }
-    .privacy-callout {
-      font-size: .72rem; line-height: 1.52; color: var(--muted);
-      background: rgba(0, 175, 240, 0.06); border: 1px solid rgba(0, 175, 240, 0.2);
-      border-radius: 12px; padding: .7rem .85rem; margin-bottom: .9rem;
-    }
-    .privacy-callout strong {
-      display: block; font-size: .65rem; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); margin-bottom: .35rem;
-    }
-    .amount { font-size: 1.95rem; font-weight: 800; color: var(--primary); margin-bottom: 1rem; letter-spacing: -.04em; }
-    .btn {
-      display: block; width: 100%; text-align: center;
-      font-weight: 800; padding: .85rem 1rem; border-radius: 14px;
-      background: linear-gradient(135deg, var(--primary) 0%, var(--primary-deep) 100%);
-      color: #fff; border: none; cursor: pointer; font-family: inherit; font-size: .92rem;
-      box-shadow: 0 10px 32px rgba(0, 175, 240, .28);
-      text-decoration: none;
-    }
-    .fine { font-size: .66rem; color: var(--muted); text-align: center; margin-top: .7rem; line-height: 1.48; }
-  </style>
+  <style>${CHECKOUT_UI_CSS}</style>
 </head>
 <body>
   <div class="wrap">
     <article class="card">
       <div class="card-accent" aria-hidden="true"></div>
       <div class="card-body">
-        <p class="eyebrow">Secure encrypted checkout</p>
+        <p class="eyebrow">Checkout</p>
         <h1 class="brand">${escapeHtml(SITE_NAME)}</h1>
         <div class="divider"></div>
         <p class="label">Your order</p>
@@ -661,7 +790,7 @@ function sendWhopCheckoutPage(res, payload) {
           showPrivacyBlurb
             ? `<div class="privacy-callout" role="status">
           <strong>Privacy</strong>
-          <span>Payment processor receives a neutral description (<span style="font-family:ui-monospace,monospace;color:#7dd3fc">${htmlMasked}</span>). Your receipt and bank statement avoid the title above.</span>
+          <span>Payment processor receives a neutral description (<span style="font-family:ui-monospace,monospace;color:var(--primary)">${htmlMasked}</span>). Your receipt and bank statement avoid the title above.</span>
         </div>`
             : `<div class="privacy-callout" role="status">
           <strong>Privacy</strong>
@@ -669,7 +798,7 @@ function sendWhopCheckoutPage(res, payload) {
         </div>`
         }
         <p class="amount">$${htmlAmount} <small style="font-size:.76rem;color:var(--muted);font-weight:700">${htmlCur}</small></p>
-        <a class="btn" id="btn-whop" href="${escapeHtml(checkoutUrl)}">Pay Instantly</a>
+        <a class="btn" id="btn-whop" href="${escapeHtml(checkoutUrl)}">Pay and receive</a>
         <p class="fine">${escapeHtml(fine)}</p>
       </div>
     </article>
@@ -802,69 +931,14 @@ function sendZuckPayCardCheckoutPage(res, payload) {
   <meta name="referrer" content="no-referrer">
   <title>${escapeHtml(`${SITE_NAME} · Checkout`)}</title>
   <script src="https://js.stripe.com/v3/"></script>
-  <style>
-    :root { --bg-deep: #020617; --paper: rgba(2, 8, 36, 0.94); --primary: #ff3366; --accent: #00e5ff; --text: #e8e8e8; --muted: rgba(148, 163, 184, 0.92); }
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    html { color-scheme: dark; }
-    body {
-      font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
-      min-height: 100vh; display: flex; align-items: center; justify-content: center;
-      padding: 28px 18px;
-      background: linear-gradient(180deg, #030925 0%, var(--bg-deep) 50%, #000 100%);
-      color: var(--text);
-    }
-    .wrap { width: 100%; max-width: 420px; }
-    .card { border-radius: 20px; background: var(--paper); border: 1px solid rgba(129, 140, 248, 0.22); box-shadow: 0 24px 64px rgba(0,0,0,.55); overflow: hidden; }
-    .card-accent { height: 4px; background: linear-gradient(90deg, var(--primary), var(--accent)); }
-    .card-body { padding: 1.55rem 1.45rem 1.35rem; }
-    .eyebrow { font-size: 0.68rem; font-weight: 700; letter-spacing: .16em; text-transform: uppercase; color: var(--accent); margin-bottom: .35rem; }
-    .brand { font-size: 1.08rem; font-weight: 800; letter-spacing: -.03em; margin-bottom: .75rem; }
-    .divider { height: 1px; background: linear-gradient(90deg, transparent, rgba(129,140,248,.35), transparent); margin: .2rem 0 .85rem; }
-    .label { font-size: .62rem; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); margin-bottom: .25rem; }
-    .real { font-size: .95rem; font-weight: 600; margin-bottom: .55rem; line-height: 1.42; }
-    .cancel-banner {
-      font-size: 0.82rem; line-height: 1.45; color: #fcd34d;
-      background: rgba(251, 191, 36, 0.1); border: 1px solid rgba(251, 191, 36, 0.28);
-      border-radius: 10px; padding: 0.65rem 0.75rem; margin-bottom: 0.85rem;
-    }
-    .privacy-callout {
-      font-size: .72rem; line-height: 1.52; color: var(--muted);
-      background: rgba(0, 229, 255, 0.06); border: 1px solid rgba(0, 229, 255, 0.2);
-      border-radius: 12px; padding: .7rem .85rem; margin-bottom: .9rem;
-    }
-    .privacy-callout strong {
-      display: block; font-size: .65rem; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); margin-bottom: .35rem;
-    }
-    .amount { font-size: 1.95rem; font-weight: 800; color: var(--primary); margin-bottom: 1rem; letter-spacing: -.04em; }
-    .field { margin-bottom: .75rem; }
-    .field label { display: block; font-size: .68rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin-bottom: .35rem; }
-    .field input {
-      width: 100%; padding: .72rem .8rem; border-radius: 10px; border: 1px solid rgba(129,140,248,.28);
-      background: rgba(255,255,255,.04); color: var(--text); font: inherit;
-    }
-    #card-element {
-      padding: .78rem .8rem; border-radius: 10px; border: 1px solid rgba(129,140,248,.28);
-      background: rgba(255,255,255,.04);
-    }
-    #card-errors { font-size: .74rem; color: #fca5a5; min-height: 1.1rem; margin-top: .45rem; }
-    .btn {
-      display: block; width: 100%; text-align: center;
-      font-weight: 800; padding: .85rem 1rem; border-radius: 14px; margin-top: .85rem;
-      background: linear-gradient(120deg, #6c54ff 0%, #0096d9 52%, #00c9c8);
-      color: #fff; border: none; cursor: pointer; font-family: inherit; font-size: .92rem;
-      box-shadow: 0 14px 40px rgba(108, 84, 255, .28);
-    }
-    .btn:disabled { opacity: .55; cursor: not-allowed; }
-    .fine { font-size: .66rem; color: var(--muted); text-align: center; margin-top: .7rem; line-height: 1.48; }
-    .back { display: block; text-align: center; margin-top: .55rem; font-size: .72rem; color: var(--muted); }
-  </style>
+  <style>${CHECKOUT_UI_CSS}</style>
 </head>
 <body>
   <div class="wrap">
     <article class="card">
       <div class="card-accent" aria-hidden="true"></div>
       <div class="card-body">
-        <p class="eyebrow">Secure checkout · Card (USD)</p>
+        <p class="eyebrow">Checkout · Card</p>
         <h1 class="brand">${escapeHtml(SITE_NAME)}</h1>
         <div class="divider"></div>
         ${cancelBanner}
@@ -874,7 +948,7 @@ function sendZuckPayCardCheckoutPage(res, payload) {
           showPrivacyBlurb
             ? `<div class="privacy-callout" role="status">
           <strong>Privacy</strong>
-          <span>Payment processor receives a neutral description (<span style="font-family:ui-monospace,monospace;color:#7dd3fc">${htmlMasked}</span>). Your receipt and bank statement avoid the title above.</span>
+          <span>Payment processor receives a neutral description (<span style="font-family:ui-monospace,monospace;color:var(--primary)">${htmlMasked}</span>). Your receipt and bank statement avoid the title above.</span>
         </div>`
             : `<div class="privacy-callout" role="status">
           <strong>Privacy</strong>
@@ -896,7 +970,7 @@ function sendZuckPayCardCheckoutPage(res, payload) {
             <div id="card-element"></div>
             <div id="card-errors" role="alert"></div>
           </div>
-          <button type="submit" class="btn" id="zp-submit">Pay securely</button>
+          <button type="submit" class="btn" id="zp-submit">Pay and receive</button>
         </form>
         <p class="fine">Encrypted card payment in USD. After paying you return to the store.</p>
         <a class="back" href="${escapeHtml(cancelUrl)}">Cancel and go back</a>
@@ -911,8 +985,8 @@ function sendZuckPayCardCheckoutPage(res, payload) {
       var elements = stripe.elements();
       var card = elements.create('card', {
         style: {
-          base: { color: '#e8e8e8', fontFamily: 'system-ui, sans-serif', fontSize: '16px', '::placeholder': { color: '#94a3b8' } },
-          invalid: { color: '#fca5a5' }
+          base: { color: '#111827', fontFamily: 'system-ui, sans-serif', fontSize: '16px', '::placeholder': { color: '#9ca3af' } },
+          invalid: { color: '#dc2626' }
         }
       });
       card.mount('#card-element');
@@ -1396,180 +1470,16 @@ function handlePayPalCheckout(req, res) {
   <meta name="referrer" content="no-referrer">
   <meta http-equiv="Referrer-Policy" content="no-referrer">
   <title>${pageTitle}</title>
-  <style>
-    :root {
-      --bg-deep: #020617;
-      --bg-mid: #030925;
-      --paper: rgba(2, 8, 36, 0.94);
-      --paper-border: rgba(129, 140, 248, 0.22);
-      --primary: #ff3366;
-      --accent: #00e5ff;
-      --text: #e8e8e8;
-      --muted: #9fb3ff;
-      --muted2: rgba(148, 163, 184, 0.88);
-    }
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    html { color-scheme: dark; }
-    body {
-      font-family: 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, 'Roboto', 'Inter', sans-serif;
-      min-height: 100vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: 28px 18px;
-      background: linear-gradient(180deg, var(--bg-mid) 0%, var(--bg-deep) 50%, #000 100%);
-      color: var(--text);
-      position: relative;
-      overflow-x: hidden;
-    }
-    .ambient {
-      pointer-events: none;
-      position: fixed;
-      inset: 0;
-      background:
-        radial-gradient(ellipse 90% 55% at 50% -25%, rgba(255, 51, 102, 0.2), transparent),
-        radial-gradient(ellipse 55% 45% at 100% 40%, rgba(0, 229, 255, 0.07), transparent),
-        radial-gradient(ellipse 45% 45% at 0% 85%, rgba(255, 51, 102, 0.09), transparent);
-    }
-    .wrap { width: 100%; max-width: 420px; position: relative; z-index: 1; }
-    .card {
-      position: relative;
-      border-radius: 20px;
-      background: var(--paper);
-      border: 1px solid var(--paper-border);
-      box-shadow:
-        0 0 0 1px rgba(255, 51, 102, 0.07),
-        0 24px 64px rgba(0, 0, 0, 0.55),
-        0 0 100px rgba(255, 51, 102, 0.06);
-      overflow: hidden;
-      backdrop-filter: blur(12px);
-    }
-    .card-accent { height: 4px; width: 100%; background: linear-gradient(90deg, var(--primary), var(--accent)); }
-    .card-body { padding: 1.65rem 1.5rem 1.45rem; }
-    .eyebrow {
-      font-size: 0.68rem;
-      font-weight: 700;
-      letter-spacing: 0.16em;
-      text-transform: uppercase;
-      color: var(--accent);
-      margin-bottom: 0.3rem;
-    }
-    .brand {
-      font-size: 1.32rem;
-      font-weight: 800;
-      letter-spacing: -0.03em;
-      color: var(--text);
-      line-height: 1.2;
-      margin-bottom: 0.65rem;
-    }
-    .badge {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      font-size: 0.78rem;
-      color: var(--muted2);
-      margin-bottom: 0.95rem;
-    }
-    .divider {
-      height: 1px;
-      background: linear-gradient(90deg, transparent, rgba(129, 140, 248, 0.35), transparent);
-      margin: 0.15rem 0 0.95rem;
-    }
-    .cancel-banner {
-      font-size: 0.82rem;
-      line-height: 1.45;
-      color: #fcd34d;
-      background: rgba(251, 191, 36, 0.1);
-      border: 1px solid rgba(251, 191, 36, 0.28);
-      border-radius: 10px;
-      padding: 0.65rem 0.75rem;
-      margin-bottom: 0.85rem;
-    }
-    .label {
-      font-size: 0.62rem;
-      font-weight: 700;
-      letter-spacing: 0.14em;
-      text-transform: uppercase;
-      color: var(--muted);
-      margin-bottom: 0.3rem;
-    }
-    .product { font-size: 0.9rem; color: var(--text); line-height: 1.45; margin-bottom: 0.8rem; opacity: 0.93; }
-    .product-real { font-weight: 600; font-size: 0.95rem; margin-bottom: 0.45rem !important; }
-    .privacy-callout {
-      font-size: 0.72rem;
-      line-height: 1.5;
-      color: var(--muted2);
-      background: rgba(0, 229, 255, 0.06);
-      border: 1px solid rgba(0, 229, 255, 0.2);
-      border-radius: 12px;
-      padding: 0.7rem 0.85rem;
-      margin-bottom: 0.85rem;
-    }
-    .privacy-callout strong {
-      display: block;
-      font-size: 0.65rem;
-      letter-spacing: 0.1em;
-      text-transform: uppercase;
-      color: var(--accent);
-      margin-bottom: 0.4rem;
-    }
-    .privacy-p { margin: 0; }
-    .paypal-label {
-      font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
-      font-size: 0.88em;
-      color: var(--muted);
-      word-break: break-word;
-    }
-    .amount {
-      font-size: 2.1rem;
-      font-weight: 800;
-      letter-spacing: -0.04em;
-      color: var(--primary);
-      margin-bottom: 1.25rem;
-      text-shadow: 0 0 48px rgba(255, 51, 102, 0.22);
-    }
-    .amount .cur-symbol { font-size: 1.25rem; opacity: 0.88; margin-right: 1px; }
-    .amount .cur-code {
-      font-size: 0.82rem;
-      font-weight: 700;
-      color: var(--muted);
-      margin-left: 6px;
-      letter-spacing: 0.04em;
-    }
-    .pp-wrap {
-      background: rgba(255, 255, 255, 0.035);
-      border: 1px solid rgba(148, 163, 255, 0.14);
-      border-radius: 16px;
-      padding: 1rem 0.95rem 1.05rem;
-    }
-    .pp-label {
-      font-size: 0.76rem;
-      font-weight: 600;
-      color: var(--muted2);
-      text-align: center;
-      margin-bottom: 0.6rem;
-    }
-    #paypal-button-container { min-height: 48px; }
-    #loading { text-align: center; font-size: 0.78rem; color: var(--muted); margin-top: 0.7rem; }
-    .fine {
-      font-size: 0.66rem;
-      line-height: 1.5;
-      color: var(--muted2);
-      text-align: center;
-      margin-top: 0.55rem;
-    }
-  </style>
+  <style>${CHECKOUT_UI_CSS}</style>
   <script src="${paypalScriptUrl}" data-namespace="paypal_sdk" referrerpolicy="no-referrer"></script>
 </head>
 <body>
-  <div class="ambient" aria-hidden="true"></div>
   <div class="wrap">
     <article class="card">
       <div class="card-accent" aria-hidden="true"></div>
       <div class="card-body">
         <p class="eyebrow">Checkout</p>
         <h1 class="brand">${htmlBrand}</h1>
-        <p class="badge"><span aria-hidden="true">🔒</span> Encrypted session · PayPal secure payment</p>
         <div class="divider" aria-hidden="true"></div>
         ${cancelBanner}
         ${orderBlock}
@@ -1578,8 +1488,8 @@ function handlePayPalCheckout(req, res) {
           <p class="pp-label">Pay with PayPal or card</p>
           <div id="paypal-button-container"></div>
         </div>
-        <p class="fine" id="loading">Loading secure payment…</p>
-        <p class="fine">After paying you will return to the store. If you cancel, you stay on this checkout page.</p>
+        <p class="fine" id="loading">Loading payment…</p>
+        <p class="fine">You will receive access automatically after payment.</p>
       </div>
     </article>
   </div>
