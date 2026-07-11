@@ -5,14 +5,29 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Terms of Service — Alpha Agency</title>
   <style>
-    :root { color-scheme: light dark; }
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; line-height: 1.6; max-width: 42rem; margin: 0 auto; padding: 1.5rem; }
+    :root {
+      color-scheme: light;
+      --primary: #0b6bcb;
+      --text: #111827;
+      --muted: #6b7280;
+      --border: #e5e7eb;
+      --bg: #ffffff;
+    }
+    body {
+      font-family: 'DM Sans', system-ui, -apple-system, Segoe UI, sans-serif;
+      line-height: 1.6;
+      max-width: 42rem;
+      margin: 0 auto;
+      padding: 1.5rem;
+      background: var(--bg);
+      color: var(--text);
+    }
     h1 { font-size: 1.75rem; }
     h2 { font-size: 1.15rem; margin-top: 1.75rem; }
     p, li { font-size: 0.95rem; }
-    .meta { color: #666; font-size: 0.875rem; margin-bottom: 2rem; }
-    a { color: inherit; }
-    footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid #ccc; font-size: 0.8rem; color: #666; }
+    .meta { color: var(--muted); font-size: 0.875rem; margin-bottom: 2rem; }
+    a { color: var(--primary); }
+    footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border); font-size: 0.8rem; color: var(--muted); }
   </style>
 </head>
 <body>
