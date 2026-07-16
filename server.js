@@ -1,8 +1,10 @@
 import 'dotenv/config';
 import express from 'express';
 import path from 'path';
+import crypto from 'node:crypto';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
+import * as ed from '@noble/ed25519';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -12,7 +14,25 @@ const SITE_NAME = process.env.SITE_NAME || 'EbookStore';
 /** Telegram for post-payment redirect (checkout success on this host). Videos-site passes Supabase user via ?telegram_username= when possible. */
 const TELEGRAM_USERNAME = process.env.TELEGRAM_USERNAME || '';
 /** Default checkout for videos-site and bare /api/paypal-checkout links. */
-const CHECKOUT_DEFAULT_METHOD = 'stripe';
+const CHECKOUT_DEFAULT_METHOD = 'payjsr';
+const PAYJSR_API_BASE = 'https://api.payjsr.com';
+const PAYJSR_CHECKOUT_BASE = String(process.env.PAYJSR_CHECKOUT_BASE_URL || 'https://checkout.payjsr.com').replace(
+  /\/+$/,
+  ''
+);
+const PAYJSR_CHECKOUT_CURRENCY = 'ZAR';
+const CHECKOUT_DISPLAY_CURRENCIES = [
+  { code: 'ZAR', name: 'South African Rand', symbol: 'R', decimals: 2 },
+  { code: 'USD', name: 'US Dollar', symbol: '$', decimals: 2 },
+  { code: 'EUR', name: 'Euro', symbol: '€', decimals: 2 },
+  { code: 'GBP', name: 'British Pound', symbol: '£', decimals: 2 },
+  { code: 'BRL', name: 'Brazilian Real', symbol: 'R$', decimals: 2 },
+  { code: 'CAD', name: 'Canadian Dollar', symbol: 'C$', decimals: 2 },
+  { code: 'AUD', name: 'Australian Dollar', symbol: 'A$', decimals: 2 },
+  { code: 'NGN', name: 'Nigerian Naira', symbol: '₦', decimals: 2 },
+  { code: 'INR', name: 'Indian Rupee', symbol: '₹', decimals: 2 },
+  { code: 'MXN', name: 'Mexican Peso', symbol: '$', decimals: 2 },
+];
 
 /** Shared light theme for all in-app checkout pages (matches videos/ebooks storefront). */
 const CHECKOUT_UI_CSS = `
@@ -223,6 +243,42 @@ const CHECKOUT_UI_CSS = `
       font-size: 0.72rem;
       color: var(--muted);
     }
+    .fx-panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 0.85rem 0.9rem;
+      margin-bottom: 0.95rem;
+    }
+    .fx-panel .amount { margin-bottom: 0.55rem; }
+    .fx-row {
+      display: flex;
+      gap: 0.5rem;
+      align-items: center;
+      margin-top: 0.45rem;
+    }
+    .fx-row select {
+      flex: 1;
+      padding: 0.55rem 0.65rem;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text);
+      font: inherit;
+      font-size: 0.85rem;
+    }
+    .fx-equiv {
+      font-size: 0.92rem;
+      font-weight: 600;
+      color: var(--text);
+      margin-top: 0.5rem;
+    }
+    .fx-note {
+      font-size: 0.7rem;
+      line-height: 1.45;
+      color: var(--muted);
+      margin-top: 0.55rem;
+    }
 `;
 
 app.use(express.json());
@@ -379,6 +435,519 @@ function paddleJsEnvironment() {
   const key = process.env.PADDLE_API_KEY || '';
   if (/^pdl_sdbx_/i.test(key) || String(process.env.PADDLE_ENV || '').toLowerCase() === 'sandbox') return 'sandbox';
   return 'production';
+}
+
+function getPayJSRCredentials() {
+  return {
+    secretKey: String(process.env.PAYJSR_SECRET_KEY || '').trim(),
+    publicKey: String(process.env.PAYJSR_PUBLIC_KEY || '').trim(),
+    merchantUserId: String(
+      process.env.PAYJSR_MERCHANT_USER_ID ||
+        process.env.PAYJSR_BUSINESS_ID ||
+        process.env.PAYJSR_USER_ID ||
+        ''
+    ).trim(),
+  };
+}
+
+function payjsrSecretPayload(secretKey) {
+  return Buffer.from(String(secretKey || '').replace(/^sk_(test|live)_/, ''), 'base64url');
+}
+
+async function payjsrAuthHeaders(method, path, rawBody = '') {
+  const { secretKey, publicKey } = getPayJSRCredentials();
+  if (!secretKey || !publicKey) {
+    throw new Error('PayJSR keys are not configured');
+  }
+  const ts = new Date().toISOString();
+  const bodyHash = crypto.createHash('sha256').update(rawBody).digest('hex');
+  const msg = `${method.toUpperCase()}\n${path}\n${bodyHash}\n${ts}`;
+  const sig = Buffer.from(
+    await ed.signAsync(new TextEncoder().encode(msg), payjsrSecretPayload(secretKey))
+  ).toString('base64url');
+  return {
+    'X-PayJSR-Key': publicKey,
+    'X-PayJSR-Timestamp': ts,
+    'X-PayJSR-Signature': sig,
+    'Content-Type': 'application/json',
+  };
+}
+
+async function payjsrLegacyAuthHeaders() {
+  const { secretKey } = getPayJSRCredentials();
+  if (!secretKey) throw new Error('PayJSR secret key is not configured');
+  return {
+    'x-api-key': secretKey,
+    'Content-Type': 'application/json',
+  };
+}
+
+async function payjsrApiRequest(method, path, body, auth = 'signed') {
+  const rawBody = body == null ? '' : JSON.stringify(body);
+  const headers =
+    auth === 'legacy' ? await payjsrLegacyAuthHeaders() : await payjsrAuthHeaders(method, path, rawBody);
+  const res = await fetch(`${PAYJSR_API_BASE}${path}`, {
+    method,
+    headers,
+    body: method === 'GET' ? undefined : rawBody || undefined,
+  });
+  const data = await res.json().catch(() => ({}));
+  return { data, httpStatus: res.status, auth };
+}
+
+async function payjsrGetLiveMode() {
+  // Public /v1/live_mode returns account:null and is not account-scoped.
+  // Prefer signed auth so the result reflects this merchant's LIVE toggle.
+  for (const auth of ['signed', 'legacy']) {
+    try {
+      const { data } = await payjsrApiRequest('GET', '/v1/live_mode', null, auth);
+      if (data && typeof data.livemode === 'boolean' && data.account != null) {
+        return data.livemode === true;
+      }
+      if (data && typeof data.livemode === 'boolean' && auth === 'signed') {
+        return data.livemode === true;
+      }
+    } catch {
+      /* try next */
+    }
+  }
+  return null;
+}
+
+async function payjsrCheckoutLinkReachable(url) {
+  try {
+    const res = await fetch(url, {
+      method: 'GET',
+      redirect: 'manual',
+      signal: AbortSignal.timeout(6000),
+      headers: { Accept: 'text/html' },
+    });
+    if (res.status === 404) return false;
+    const text = await res.text().catch(() => '');
+    if (/payment link not found|page not found|invalid, expired, or deactivated/i.test(text)) return false;
+    return res.status < 500;
+  } catch {
+    return null;
+  }
+}
+
+function absolutePayJSRCheckoutUrl(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (/^https?:\/\//i.test(raw)) return raw;
+  if (raw.startsWith('/')) return `${PAYJSR_CHECKOUT_BASE}${raw}`;
+  return '';
+}
+
+function payjsrCandidateCheckoutUrls(session) {
+  const sessionId = payjsrSessionIdFromValue(
+    session?.session_id || session?.link_id || session?.id || session?.checkout_url || ''
+  );
+  const urls = [];
+  const push = (u) => {
+    const v = absolutePayJSRCheckoutUrl(u) || (String(u || '').trim().match(/^https?:\/\//i) ? String(u).trim() : '');
+    if (!v) return;
+    if (!urls.includes(v)) urls.push(v);
+  };
+
+  // Prefer the exact path returned by PayJSR Core API (often relative: /checkout/core/<id>).
+  push(session?.checkout_url);
+  push(session?.payment_url);
+  push(session?.url);
+  if (sessionId) {
+    push(`/checkout/core/${sessionId}`);
+    push(`/${sessionId}`);
+    push(`/pay/${sessionId}`);
+  }
+  return urls;
+}
+
+function normalizeCurrencyCode(raw, fallback = 'USD') {
+  const code = String(raw || fallback).toUpperCase();
+  return /^[A-Z]{3}$/.test(code) ? code : fallback;
+}
+
+function minorToMajor(amountMinor, decimals = 2) {
+  const n = Number(amountMinor);
+  if (!Number.isFinite(n)) return 0;
+  return n / 10 ** decimals;
+}
+
+function majorToMinor(amountMajor, decimals = 2) {
+  const n = Number(amountMajor);
+  if (!Number.isFinite(n)) return 0;
+  return Math.round(n * 10 ** decimals);
+}
+
+function manualFxRate(fromCurrency, toCurrency) {
+  const from = normalizeCurrencyCode(fromCurrency);
+  const to = normalizeCurrencyCode(toCurrency);
+  const direct = process.env[`PAYJSR_FX_RATE_${from}_${to}`];
+  if (direct && Number.isFinite(Number(direct))) return Number(direct);
+  const inverse = process.env[`PAYJSR_FX_RATE_${to}_${from}`];
+  if (inverse && Number.isFinite(Number(inverse)) && Number(inverse) !== 0) {
+    return 1 / Number(inverse);
+  }
+  return null;
+}
+
+async function publicFxQuote(fromCurrency, toCurrency, amountMinor, toDecimals = 2) {
+  const from = normalizeCurrencyCode(fromCurrency);
+  const to = normalizeCurrencyCode(toCurrency);
+  const amount = Math.max(1, Math.round(Number(amountMinor) || 0));
+  if (from === to) {
+    return { amountMinor: amount, rate: 1, decimals: toDecimals, source: 'identity' };
+  }
+
+  const manualRate = manualFxRate(from, to);
+  if (manualRate != null) {
+    const major = minorToMajor(amount, 2);
+    return {
+      amountMinor: majorToMinor(major * manualRate, toDecimals),
+      rate: manualRate,
+      decimals: toDecimals,
+      source: 'env',
+    };
+  }
+
+  const amountMajor = minorToMajor(amount, 2);
+  const providers = [
+    async () => {
+      const url = `https://api.frankfurter.app/latest?amount=${amountMajor}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`;
+      const res = await fetch(url, { signal: AbortSignal.timeout(4000) });
+      const data = await res.json().catch(() => ({}));
+      const convertedMajor = data?.rates?.[to];
+      if (convertedMajor == null || !Number.isFinite(Number(convertedMajor))) return null;
+      return {
+        amountMinor: majorToMinor(Number(convertedMajor), toDecimals),
+        rate: Number(convertedMajor) / amountMajor,
+        decimals: toDecimals,
+        source: 'frankfurter',
+      };
+    },
+    async () => {
+      const url = `https://open.er-api.com/v6/latest/${encodeURIComponent(from)}`;
+      const res = await fetch(url, { signal: AbortSignal.timeout(4000) });
+      const data = await res.json().catch(() => ({}));
+      const pairRate = data?.rates?.[to];
+      if (pairRate == null || !Number.isFinite(Number(pairRate))) return null;
+      return {
+        amountMinor: majorToMinor(amountMajor * Number(pairRate), toDecimals),
+        rate: Number(pairRate),
+        decimals: toDecimals,
+        source: 'open.er-api',
+      };
+    },
+  ];
+
+  for (const provider of providers) {
+    try {
+      const quote = await provider();
+      if (quote) return quote;
+    } catch (err) {
+      console.warn('Public FX provider failed:', err?.message || err);
+    }
+  }
+
+  throw new Error('FX quote unavailable');
+}
+
+async function payjsrFxQuote(fromCurrency, toCurrency, amountMinor, toDecimals = 2) {
+  return publicFxQuote(fromCurrency, toCurrency, amountMinor, toDecimals);
+}
+
+let fxQuoteCache = new Map();
+async function cachedFxQuote(fromCurrency, toCurrency, amountMinor, toDecimals = 2) {
+  const from = normalizeCurrencyCode(fromCurrency);
+  const to = normalizeCurrencyCode(toCurrency);
+  const amount = Math.max(1, Math.round(Number(amountMinor) || 0));
+  const key = `${from}:${to}:${amount}`;
+  const hit = fxQuoteCache.get(key);
+  if (hit && Date.now() - hit.at < 5 * 60 * 1000) return hit.quote;
+  const quote = await payjsrFxQuote(from, to, amount, toDecimals);
+  fxQuoteCache.set(key, { at: Date.now(), quote });
+  return quote;
+}
+
+function getPayJSRPaymentLinks() {
+  const raw = String(process.env.PAYJSR_PAYMENT_LINKS || '').trim();
+  if (!raw) return [];
+
+  // JSON array: [{"amount_zar":500,"url":"https://..."},{"amount_usd":15,"url":"https://..."}]
+  if (raw.startsWith('[')) {
+    try {
+      const list = JSON.parse(raw);
+      return (Array.isArray(list) ? list : [])
+        .map((item) => ({
+          amountZar: item.amount_zar != null ? Number(item.amount_zar) : null,
+          amountUsd: item.amount_usd != null ? Number(item.amount_usd) : null,
+          url: String(item.url || '').trim(),
+          name: String(item.name || '').trim(),
+        }))
+        .filter((item) => item.url && /^https?:\/\//i.test(item.url));
+    } catch (err) {
+      console.warn('PAYJSR_PAYMENT_LINKS JSON invalid:', err?.message || err);
+      return [];
+    }
+  }
+
+  // Simple lines / semicolon list:
+  //   500|https://checkout.payjsr.com/uuid
+  //   15usd|https://checkout.payjsr.com/uuid
+  //   zar:245.74|https://...
+  return raw
+    .split(/[\n;]+/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const sep = line.includes('|') ? '|' : ',';
+      const [pricePart, ...urlParts] = line.split(sep);
+      const url = urlParts.join(sep).trim();
+      if (!url || !/^https?:\/\//i.test(url)) return null;
+      const token = String(pricePart || '').trim().toLowerCase();
+      let amountZar = null;
+      let amountUsd = null;
+      if (/^usd:/.test(token) || /usd$/.test(token)) {
+        amountUsd = Number(token.replace(/^usd:/, '').replace(/usd$/, ''));
+      } else if (/^zar:/.test(token) || /zar$/.test(token)) {
+        amountZar = Number(token.replace(/^zar:/, '').replace(/zar$/, ''));
+      } else {
+        amountZar = Number(token);
+      }
+      return {
+        amountZar: Number.isFinite(amountZar) ? amountZar : null,
+        amountUsd: Number.isFinite(amountUsd) ? amountUsd : null,
+        url,
+        name: '',
+      };
+    })
+    .filter(Boolean);
+}
+
+function findMatchingPayJSRLink({ listAmountMajor, listCurrency, zarAmountMajor, tolerance = 0.12 }) {
+  const links = getPayJSRPaymentLinks();
+  if (!links.length) return null;
+
+  const listCur = normalizeCurrencyCode(listCurrency, 'USD');
+  const listAmt = Number(listAmountMajor);
+  const zarAmt = Number(zarAmountMajor);
+
+  const scored = [];
+  for (const link of links) {
+    let score = Infinity;
+    let matchType = '';
+
+    if (link.amountUsd != null && listCur === 'USD' && Number.isFinite(listAmt)) {
+      const diff = Math.abs(link.amountUsd - listAmt);
+      if (diff < 0.005) {
+        score = 0;
+        matchType = 'exact_usd';
+      } else if (listAmt > 0 && diff / listAmt <= tolerance) {
+        score = diff / listAmt;
+        matchType = 'approx_usd';
+      }
+    }
+
+    if (link.amountZar != null && Number.isFinite(zarAmt)) {
+      const diff = Math.abs(link.amountZar - zarAmt);
+      if (diff < 0.05) {
+        score = Math.min(score, 0);
+        matchType = matchType || 'exact_zar';
+      } else if (zarAmt > 0 && diff / zarAmt <= tolerance) {
+        const s = diff / zarAmt;
+        if (s < score) {
+          score = s;
+          matchType = 'approx_zar';
+        }
+      }
+    }
+
+    // Also allow matching USD list price against amount_zar when user only set ZAR on the link
+    // and list currency is USD — skip; FX already produced zarAmt above.
+
+    if (score < Infinity) {
+      scored.push({ link, score, matchType });
+    }
+  }
+
+  if (!scored.length) return null;
+  scored.sort((a, b) => a.score - b.score);
+  return scored[0];
+}
+
+async function payjsrCreateCheckoutSession(amountMinorZar, options = {}) {
+  const {
+    productName = 'Digital Ebook',
+    description = '',
+    internalReference = '',
+    successUrl = '',
+    cancelUrl = '',
+  } = options;
+  const { merchantUserId, secretKey } = getPayJSRCredentials();
+  if (!merchantUserId) {
+    throw new Error('PayJSR merchant user id is not configured (PAYJSR_MERCHANT_USER_ID)');
+  }
+
+  const usingLiveKey = /^sk_live_/i.test(secretKey);
+  const liveMode = await payjsrGetLiveMode();
+  if (usingLiveKey && liveMode === false) {
+    console.warn(
+      'PayJSR GET /v1/live_mode returned false, but dashboard LIVE may still be on. Continuing.'
+    );
+  }
+
+  const amountMinor = Math.max(1, Math.round(Number(amountMinorZar) || 0));
+  const amountMajor = Number((amountMinor / 100).toFixed(2));
+  const title = String(productName || 'Digital Ebook').trim().slice(0, 200);
+  const desc = String(description || title).trim().slice(0, 500);
+  const reference = String(internalReference || ('order-' + Date.now())).trim().slice(0, 100);
+  const returnUrl = successUrl || cancelUrl || '';
+
+  // Mirror Dashboard → Payment Links → Create Payment Link fields.
+  const paymentLinkBodies = [
+    {
+      merchant_user_id: merchantUserId,
+      name: title,
+      payment_name: title,
+      title,
+      description: desc,
+      amount: amountMajor,
+      currency: PAYJSR_CHECKOUT_CURRENCY,
+      billing_type: 'one_time',
+      payment_methods: ['card'],
+      payment_method: 'card',
+      internal_reference: reference,
+      return_url: returnUrl || undefined,
+      success_url: successUrl || undefined,
+    },
+    {
+      merchant_user_id: merchantUserId,
+      name: title,
+      description: desc,
+      amount: amountMinor,
+      currency: PAYJSR_CHECKOUT_CURRENCY,
+      billing_type: 'one_time',
+      payment_methods: ['card'],
+      internal_reference: reference,
+      return_url: returnUrl || undefined,
+    },
+  ];
+
+  const coreSessionBodies = [
+    {
+      merchant_user_id: merchantUserId,
+      amount: amountMinor,
+      currency: PAYJSR_CHECKOUT_CURRENCY,
+      ...(successUrl ? { success_url: successUrl } : {}),
+      ...(cancelUrl ? { cancel_url: cancelUrl } : {}),
+    },
+  ];
+
+  const attempts = [
+    { path: '/v1/payment_links', bodies: paymentLinkBodies },
+    { path: '/v1/payment-links', bodies: paymentLinkBodies },
+    { path: '/v1/links', bodies: paymentLinkBodies },
+    { path: '/v1/checkout_links', bodies: paymentLinkBodies },
+    { path: '/v1/checkout/sessions', bodies: coreSessionBodies },
+    { path: '/v1/checkout_sessions', bodies: coreSessionBodies },
+  ];
+
+  const auths = ['signed', 'legacy'];
+  let lastError = 'PayJSR payment link creation failed';
+  let lastData = null;
+
+  for (const attempt of attempts) {
+    for (const body of attempt.bodies) {
+      const cleanBody = Object.fromEntries(
+        Object.entries(body).filter(([, v]) => v !== undefined && v !== '')
+      );
+      for (const auth of auths) {
+        const { data } = await payjsrApiRequest('POST', attempt.path, cleanBody, auth);
+        lastData = data;
+        const errLabel = [data?.step, data?.error].filter(Boolean).join(': ');
+        if (!data?.ok) {
+          if (errLabel && !/unknown endpoint/i.test(errLabel)) {
+            console.warn('PayJSR ' + auth + ' ' + attempt.path + ' failed:', errLabel);
+          }
+          lastError = errLabel || lastError;
+          continue;
+        }
+
+        const linkId =
+          data.link_id ||
+          data.payment_link_id ||
+          data.session_id ||
+          data.id ||
+          '';
+        let finalUrl = resolvePayJSRCheckoutUrl({
+          ...data,
+          session_id: linkId,
+          checkout_url: data.checkout_url || data.url || data.payment_url || data.link,
+        });
+
+        // Dashboard payment links use https://checkout.payjsr.com/<uuid> (no /checkout/core).
+        if (attempt.path.includes('payment') || attempt.path.includes('link')) {
+          if (linkId) finalUrl = PAYJSR_CHECKOUT_BASE + '/' + linkId;
+        }
+        if (!finalUrl && linkId) {
+          finalUrl = PAYJSR_CHECKOUT_BASE + '/' + linkId;
+        }
+        if (!finalUrl) {
+          lastError = 'PayJSR ' + attempt.path + ' returned ok without URL';
+          continue;
+        }
+
+        console.log('PayJSR payment link created:', {
+          auth,
+          path: attempt.path,
+          body_amount: cleanBody.amount,
+          link_id: linkId,
+          checkout_url: finalUrl,
+          api_checkout_url: data.checkout_url || data.url,
+          livemode: data.livemode,
+          account_livemode: liveMode,
+          keys: Object.keys(data),
+        });
+
+        return {
+          ...data,
+          session_id: linkId,
+          checkout_url: finalUrl,
+          _endpoint: attempt.path,
+        };
+      }
+    }
+  }
+
+  if (lastData) {
+    console.warn('PayJSR last response:', lastData);
+  }
+  throw new Error(lastError);
+}
+
+function payjsrSessionIdFromValue(value) {
+  const match = String(value || '').match(
+    /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i
+  );
+  return match ? match[1] : '';
+}
+
+function resolvePayJSRCheckoutUrl(session) {
+  // API often returns a relative path like "/checkout/core/<session_id>" — use it as-is.
+  const fromApi = absolutePayJSRCheckoutUrl(session?.checkout_url);
+  if (fromApi) return fromApi;
+
+  const direct = [session?.payment_url, session?.url, session?.link_url]
+    .map((v) => absolutePayJSRCheckoutUrl(v))
+    .find(Boolean);
+  if (direct) return direct;
+
+  const id = payjsrSessionIdFromValue(
+    session?.link_id || session?.payment_link_id || session?.session_id || session?.id || ''
+  );
+  // Core API sessions use /checkout/core/<id> (docs). Dashboard payment links use /<id>.
+  if (id) return `${PAYJSR_CHECKOUT_BASE}/checkout/core/${id}`;
+  return '';
 }
 
 const applyCommonHeaders = (res) => {
@@ -625,6 +1194,272 @@ async function handlePaddleCheckout(req, res) {
     amountStr: amountNumber.toFixed(2),
     currencyCode,
     successIntermediate,
+    showPrivacyBlurb,
+  });
+}
+
+function sendPayJSRCheckoutPage(res, payload) {
+  const {
+    checkoutUrl,
+    realTitle,
+    maskedLabel,
+    zarAmountMajor,
+    zarAmountMinor,
+    listAmountMajor,
+    listCurrency,
+    currencies,
+    showPrivacyBlurb,
+  } = payload;
+  const htmlReal = escapeHtml(realTitle);
+  const htmlMasked = escapeHtml(maskedLabel);
+  const htmlZar = escapeHtml(zarAmountMajor);
+  const htmlList = escapeHtml(listAmountMajor);
+  const htmlListCur = escapeHtml(listCurrency);
+  const checkoutUrlJson = JSON.stringify(checkoutUrl);
+  const zarMinorJson = JSON.stringify(zarAmountMinor);
+  const currenciesJson = JSON.stringify(currencies || []);
+  applyCommonHeaders(res);
+  res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="referrer" content="no-referrer">
+  <meta http-equiv="Referrer-Policy" content="no-referrer">
+  <title>${escapeHtml(`${SITE_NAME} · Continue`)}</title>
+  <style>${CHECKOUT_UI_CSS}</style>
+</head>
+<body>
+  <div class="wrap">
+    <article class="card">
+      <div class="card-accent" aria-hidden="true"></div>
+      <div class="card-body">
+        <p class="eyebrow">Checkout</p>
+        <h1 class="brand">${escapeHtml(SITE_NAME)}</h1>
+        <div class="divider"></div>
+        <p class="label">Your order</p>
+        <p class="real">${htmlReal}</p>
+        ${
+          showPrivacyBlurb
+            ? `<div class="privacy-callout" role="status">
+          <strong>Privacy</strong>
+          <span>Payment processor receives a neutral description (<span style="font-family:ui-monospace,monospace;color:var(--primary)">${htmlMasked}</span>). Your receipt and bank statement avoid the title above.</span>
+        </div>`
+            : `<div class="privacy-callout" role="status">
+          <strong>Privacy</strong>
+          <span>A generic description is sent to the payment processor so your receipt and bank statement stay discreet.</span>
+        </div>`
+        }
+        <div class="fx-panel">
+          <p class="label">Amount to pay (PayJSR)</p>
+          <p class="amount"><span class="cur-symbol">R</span>${htmlZar} <span class="cur-code">ZAR</span></p>
+          <p class="label" style="margin-top:0.35rem">List price</p>
+          <p style="font-size:0.88rem;color:var(--muted);margin-bottom:0.15rem">$${htmlList} ${htmlListCur}</p>
+          <p class="label" style="margin-top:0.55rem">See equivalent in your currency</p>
+          <div class="fx-row">
+            <select id="display-currency" aria-label="Display currency"></select>
+          </div>
+          <p class="fx-equiv" id="fx-equiv">Loading rate…</p>
+          <p class="fx-note">Payment is processed in <strong>South African Rand (ZAR)</strong> on PayJSR. The ZAR amount above is what your card will be charged. Currency equivalents are indicative.</p>
+        </div>
+        <a class="btn" id="btn-payjsr" href="${escapeHtml(checkoutUrl)}">Pay and receive</a>
+        <p class="fine">You will receive access automatically after payment.</p>
+      </div>
+    </article>
+  </div>
+  <script>
+    (function () {
+      var CHECKOUT_URL = ${checkoutUrlJson};
+      var ZAR_MINOR = ${zarMinorJson};
+      var CURRENCIES = ${currenciesJson};
+      var zarMajor = ZAR_MINOR / 100;
+      var select = document.getElementById('display-currency');
+      var equiv = document.getElementById('fx-equiv');
+      var payBtn = document.getElementById('btn-payjsr');
+      var preferred = (function () {
+        try {
+          var saved = localStorage.getItem('checkout_display_currency');
+          if (saved) return saved.toUpperCase();
+        } catch (e) {}
+        try {
+          var lang = (navigator.language || 'en-US').split('-')[1];
+          if (lang && lang.length === 2) {
+            var map = { US: 'USD', GB: 'GBP', BR: 'BRL', PT: 'EUR', ZA: 'ZAR', EU: 'EUR' };
+            if (map[lang.toUpperCase()]) return map[lang.toUpperCase()];
+          }
+        } catch (e2) {}
+        return 'USD';
+      })();
+      var popular = ['USD', 'EUR', 'GBP', 'BRL', 'CAD', 'AUD', 'ZAR', 'NGN', 'INR', 'MXN'];
+      function currencyMeta(code) {
+        for (var i = 0; i < CURRENCIES.length; i++) {
+          if (CURRENCIES[i].code === code) return CURRENCIES[i];
+        }
+        return { code: code, symbol: '', decimals: 2, name: code };
+      }
+      function buildOptions() {
+        var seen = {};
+        var codes = [];
+        popular.forEach(function (c) { if (!seen[c]) { seen[c] = true; codes.push(c); } });
+        CURRENCIES.forEach(function (c) {
+          if (c.code && !seen[c.code]) { seen[c.code] = true; codes.push(c.code); }
+        });
+        codes.sort();
+        select.innerHTML = '';
+        codes.forEach(function (code) {
+          var meta = currencyMeta(code);
+          var opt = document.createElement('option');
+          opt.value = code;
+          opt.textContent = code + (meta.name && meta.name !== code ? ' — ' + meta.name : '');
+          select.appendChild(opt);
+        });
+        if (codes.indexOf(preferred) >= 0) select.value = preferred;
+        else if (codes.length) select.value = codes[0];
+      }
+      function formatAmount(major, meta) {
+        var n = Number(major);
+        if (!isFinite(n)) return '—';
+        var d = meta && meta.decimals != null ? meta.decimals : 2;
+        var txt = n.toLocaleString(undefined, { minimumFractionDigits: Math.min(d, 2), maximumFractionDigits: d });
+        if (meta && meta.symbol) return meta.symbol + txt + ' ' + meta.code;
+        return txt + ' ' + meta.code;
+      }
+      function updateFx() {
+        var code = select.value;
+        try { localStorage.setItem('checkout_display_currency', code); } catch (e) {}
+        if (code === 'ZAR') {
+          equiv.textContent = '≈ ' + formatAmount(zarMajor, currencyMeta('ZAR'));
+          return;
+        }
+        equiv.textContent = 'Loading…';
+        fetch('/api/payjsr-fx?from=ZAR&to=' + encodeURIComponent(code) + '&amount=' + encodeURIComponent(ZAR_MINOR))
+          .then(function (r) { return r.json(); })
+          .then(function (data) {
+            if (!data || !data.ok) throw new Error((data && data.error) || 'rate unavailable');
+            var meta = currencyMeta(code);
+            var major = data.amount_minor / Math.pow(10, meta.decimals || 2);
+            equiv.textContent = '≈ ' + formatAmount(major, meta);
+            if (data.rate) {
+              equiv.textContent += ' (1 ZAR ≈ ' + Number(data.rate).toFixed(4) + ' ' + code + ')';
+            }
+            if (data.approximate) {
+              equiv.textContent += ' · indicative rate';
+            }
+          })
+          .catch(function () {
+            equiv.textContent = 'Exchange rate unavailable — you will pay R' + zarMajor.toFixed(2) + ' ZAR.';
+          });
+      }
+      buildOptions();
+      select.addEventListener('change', updateFx);
+      updateFx();
+      if (payBtn) {
+        payBtn.addEventListener('click', function (ev) {
+          if (!CHECKOUT_URL) {
+            ev.preventDefault();
+            alert('Could not open checkout. Try again.');
+          }
+        });
+      }
+    })();
+  </script>
+</body>
+</html>`);
+}
+
+async function handlePayJSRCheckout(req, res) {
+  const resolved = resolveCheckoutParams(req);
+  const { amount, success_url, product_name, display_title, currency: listCurrencyRaw } = resolved;
+  if (!amount) {
+    return res.status(400).send('Missing required parameters');
+  }
+
+  const amountNumber = Number(amount);
+  if (!Number.isFinite(amountNumber) || amountNumber <= 0) {
+    return res.status(400).send('Invalid amount');
+  }
+
+  const listCurrency = normalizeCurrencyCode(listCurrencyRaw, 'USD');
+  const listAmountMinor = majorToMinor(amountNumber, 2);
+  if (listAmountMinor < 100) {
+    return res.status(400).send('Amount too small (minimum is $1.00)');
+  }
+
+  const configuredLinks = getPayJSRPaymentLinks();
+  if (!configuredLinks.length) {
+    return res.status(500).send(
+      'No PayJSR payment links configured. Create links in the PayJSR dashboard, then set PAYJSR_PAYMENT_LINKS in .env (e.g. 15usd|https://checkout.payjsr.com/your-link-id or 500|https://...).'
+    );
+  }
+
+  applyCommonHeaders(res);
+
+  const maskedForProcessor = product_name ? String(product_name).trim() : 'Digital Ebook';
+  const realForBuyer = display_title ? String(display_title).trim() : '';
+
+  let zarQuote = null;
+  try {
+    zarQuote = await cachedFxQuote(listCurrency, PAYJSR_CHECKOUT_CURRENCY, listAmountMinor, 2);
+  } catch (err) {
+    console.warn('PayJSR FX quote failed (matching by USD still possible):', err?.message || err);
+  }
+
+  const zarAmountMinor = zarQuote ? Math.max(100, zarQuote.amountMinor) : 0;
+  const zarAmountMajor = zarQuote ? minorToMajor(zarAmountMinor, 2) : 0;
+
+  const match = findMatchingPayJSRLink({
+    listAmountMajor: amountNumber,
+    listCurrency,
+    zarAmountMajor,
+    tolerance: Number(process.env.PAYJSR_LINK_TOLERANCE || 0.12),
+  });
+
+  if (!match) {
+    const catalog = configuredLinks
+      .map((l) => {
+        if (l.amountUsd != null) return `$${l.amountUsd} USD`;
+        if (l.amountZar != null) return `R${l.amountZar} ZAR`;
+        return 'unknown';
+      })
+      .join(', ');
+    return res.status(404).send(
+      `No PayJSR payment link matches this price (${amountNumber} ${listCurrency}` +
+        (zarAmountMajor ? ` ≈ R${zarAmountMajor.toFixed(2)} ZAR` : '') +
+        `). Configured links: ${catalog || 'none'}. Add a matching entry to PAYJSR_PAYMENT_LINKS.`
+    );
+  }
+
+  const checkoutUrl = match.link.url;
+  // Show the link's ZAR amount when known (what PayJSR will charge); else FX estimate.
+  const displayZarMajor =
+    match.link.amountZar != null
+      ? Number(match.link.amountZar)
+      : zarAmountMajor || amountNumber;
+  const displayZarMinor = majorToMinor(displayZarMajor, 2);
+
+  console.log('PayJSR checkout matched existing link:', {
+    match_type: match.matchType,
+    score: match.score,
+    list_amount: amountNumber,
+    list_currency: listCurrency,
+    link_amount_zar: match.link.amountZar,
+    link_amount_usd: match.link.amountUsd,
+    checkout_url: checkoutUrl,
+  });
+
+  const showPrivacyBlurb =
+    Boolean(display_title && String(display_title).trim()) &&
+    String(realForBuyer).trim() !== String(maskedForProcessor).trim();
+
+  return sendPayJSRCheckoutPage(res, {
+    checkoutUrl,
+    realTitle: realForBuyer || maskedForProcessor,
+    maskedLabel: maskedForProcessor,
+    zarAmountMajor: displayZarMajor.toFixed(2),
+    zarAmountMinor: displayZarMinor,
+    listAmountMajor: amountNumber.toFixed(2),
+    listCurrency,
+    currencies: CHECKOUT_DISPLAY_CURRENCIES,
     showPrivacyBlurb,
   });
 }
@@ -1543,8 +2378,9 @@ function handlePayPalCheckout(req, res) {
 // - method=stripe -> Stripe Checkout (masked line item) + redirect to checkout.stripe.com
 // - method=whop -> temporarily disabled (no Whop account)
 // - method=paypal -> masked PayPal flow (on this host)
-// - method=paddle (or legacy payjsr) -> Paddle Billing: API transaction + Paddle.js overlay on this host
-// Default: stripe
+// - method=paddle -> Paddle Billing: API transaction + Paddle.js overlay on this host
+// - method=payjsr -> PayJSR hosted checkout (ZAR) with FX preview on this host
+// Default: payjsr
 app.get('/api/paypal-checkout', async (req, res) => {
   try {
     const method = String(req.query.method || CHECKOUT_DEFAULT_METHOD).toLowerCase();
@@ -1555,9 +2391,12 @@ app.get('/api/paypal-checkout', async (req, res) => {
       return await handleStripeCheckout(req, res);
     }
     if (method === 'whop') {
-      return res.status(503).send('Whop checkout is temporarily disabled. Please use Stripe checkout.');
+      return res.status(503).send('Whop checkout is temporarily disabled. Please use PayJSR checkout.');
     }
-    if (method === 'paddle' || method === 'payjsr') {
+    if (method === 'payjsr') {
+      return await handlePayJSRCheckout(req, res);
+    }
+    if (method === 'paddle') {
       return await handlePaddleCheckout(req, res);
     }
     return handlePayPalCheckout(req, res);
@@ -1598,12 +2437,12 @@ app.get('/api/stripe-checkout', async (req, res) => {
   }
 });
 
-// Legacy path name — same as /api/paypal-checkout?method=paddle
+// PayJSR checkout — same as /api/paypal-checkout?method=payjsr
 app.get('/api/payjsr-checkout', async (req, res) => {
   try {
-    return await handlePaddleCheckout(req, res);
+    return await handlePayJSRCheckout(req, res);
   } catch (err) {
-    console.error('Paddle checkout error:', err);
+    console.error('PayJSR checkout error:', err);
     return res.status(500).send('Checkout failed');
   }
 });
@@ -1614,6 +2453,33 @@ app.get('/api/paddle-checkout', async (req, res) => {
   } catch (err) {
     console.error('Paddle checkout error:', err);
     return res.status(500).send('Checkout failed');
+  }
+});
+
+app.get('/api/payjsr-fx', async (req, res) => {
+  try {
+    const from = normalizeCurrencyCode(req.query.from, PAYJSR_CHECKOUT_CURRENCY);
+    const to = normalizeCurrencyCode(req.query.to, 'USD');
+    const amountMinor = Math.max(1, Math.round(Number(req.query.amount) || 0));
+    if (!amountMinor) {
+      return res.status(400).json({ ok: false, error: 'amount required (minor units)' });
+    }
+    const meta = CHECKOUT_DISPLAY_CURRENCIES.find((c) => c.code === to);
+    const decimals = meta?.decimals ?? 2;
+    const quote = await cachedFxQuote(from, to, amountMinor, decimals);
+    return res.json({
+      ok: true,
+      from,
+      to,
+      amount_minor: quote.amountMinor,
+      rate: quote.rate,
+      decimals: quote.decimals,
+      source: quote.source,
+      approximate: quote.source !== 'env',
+    });
+  } catch (err) {
+    console.error('PayJSR FX error:', err?.message || err);
+    return res.status(502).json({ ok: false, error: err?.message || 'FX quote failed' });
   }
 });
 
@@ -1764,19 +2630,39 @@ app.post('/api/zuckpay-webhook', (req, res) => {
   }
 });
 
-app.get('/api/health', (req, res) => {
+app.get('/api/payjsr-links', (req, res) => {
+  const links = getPayJSRPaymentLinks();
+  res.json({
+    ok: true,
+    count: links.length,
+    tolerance: Number(process.env.PAYJSR_LINK_TOLERANCE || 0.12),
+    links: links.map((l) => ({
+      amount_zar: l.amountZar,
+      amount_usd: l.amountUsd,
+      name: l.name || null,
+      url: l.url,
+    })),
+  });
+});
+
+app.get('/api/health', async (req, res) => {
   const whop = getWhopCredentials();
   const stripe = getStripeCredentials();
   const zuck = getZuckPayCredentials();
+  const payjsr = getPayJSRCredentials();
+  const links = getPayJSRPaymentLinks();
   res.json({
     status: 'OK',
     site: SITE_NAME,
     zuckpay_configured: Boolean(zuck.clientId && zuck.clientSecret),
     whop_configured: Boolean(whop.apiKey && whop.companyId),
     stripe_configured: Boolean(stripe.secretKey),
+    payjsr_configured: Boolean(payjsr.secretKey && payjsr.publicKey && payjsr.merchantUserId),
+    payjsr_payment_links: links.length,
     paddle_configured: Boolean(process.env.PADDLE_API_KEY && process.env.PADDLE_CLIENT_TOKEN),
     paypal_configured: Boolean(process.env.PAYPAL_CLIENT_ID),
     checkout_default: CHECKOUT_DEFAULT_METHOD,
+    payjsr_checkout_currency: PAYJSR_CHECKOUT_CURRENCY,
   });
 });
 

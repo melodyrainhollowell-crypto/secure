@@ -25,6 +25,30 @@ services:
       - key: STRIPE_PUBLISHABLE_KEY
         sync: false
         # Stripe publishable key (pk_live_... / pk_test_...)
+      - key: PAYJSR_SECRET_KEY
+        sync: false
+        # PayJSR secret key (sk_live_... / sk_test_...) — server only
+      - key: PAYJSR_PUBLIC_KEY
+        sync: false
+        # PayJSR public key (pk_live_... / pk_test_...)
+      - key: PAYJSR_BUSINESS_ID
+        sync: false
+        # Legacy alias for PAYJSR_MERCHANT_USER_ID
+      - key: PAYJSR_MERCHANT_USER_ID
+        sync: false
+        # merchant_user_id (UUID) from PayJSR Dashboard — seller user id, not business name
+      - key: PAYJSR_PAYMENT_LINKS
+        sync: false
+        # Manual payment links from dashboard. Format: 15usd|https://checkout.payjsr.com/uuid;500|https://...
+      - key: PAYJSR_LINK_TOLERANCE
+        sync: false
+        # Optional match tolerance (default 0.12 = 12%)
+      - key: PAYJSR_FX_RATE_USD_ZAR
+        sync: false
+        # Optional manual USD→ZAR rate if PayJSR FX API is unavailable
+      - key: PAYJSR_CHECKOUT_BASE_URL
+        sync: false
+        # Default https://checkout.payjsr.com — links are /{session_id}
       - key: PADDLE_API_KEY
         sync: false
         # Paddle Billing API key (pdl_live_apikey_... ou pdl_sdbx_apikey_...)
