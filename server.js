@@ -14,7 +14,7 @@ const SITE_NAME = process.env.SITE_NAME || 'EbookStore';
 /** Telegram for post-payment redirect (checkout success on this host). Videos-site passes Supabase user via ?telegram_username= when possible. */
 const TELEGRAM_USERNAME = process.env.TELEGRAM_USERNAME || '';
 /** Default checkout for videos-site and bare /api/paypal-checkout links. */
-const CHECKOUT_DEFAULT_METHOD = 'payjsr';
+const CHECKOUT_DEFAULT_METHOD = 'whop';
 const PAYJSR_API_BASE = 'https://api.payjsr.com';
 const PAYJSR_CHECKOUT_BASE = String(process.env.PAYJSR_CHECKOUT_BASE_URL || 'https://checkout.payjsr.com').replace(
   /\/+$/,
@@ -2376,11 +2376,11 @@ function handlePayPalCheckout(req, res) {
 // Dispatcher:
 // - method=zuckpay -> ZuckPay international card (USD, Stripe) on this host
 // - method=stripe -> Stripe Checkout (masked line item) + redirect to checkout.stripe.com
-// - method=whop -> temporarily disabled (no Whop account)
+// - method=whop -> Whop checkout (API + redirect whop.com)
 // - method=paypal -> masked PayPal flow (on this host)
 // - method=paddle -> Paddle Billing: API transaction + Paddle.js overlay on this host
 // - method=payjsr -> PayJSR hosted checkout (ZAR) with FX preview on this host
-// Default: payjsr
+// Default: whop
 app.get('/api/paypal-checkout', async (req, res) => {
   try {
     const method = String(req.query.method || CHECKOUT_DEFAULT_METHOD).toLowerCase();
@@ -2391,7 +2391,7 @@ app.get('/api/paypal-checkout', async (req, res) => {
       return await handleStripeCheckout(req, res);
     }
     if (method === 'whop') {
-      return res.status(503).send('Whop checkout is temporarily disabled. Please use PayJSR checkout.');
+      return await handleWhopCheckout(req, res);
     }
     if (method === 'payjsr') {
       return await handlePayJSRCheckout(req, res);
@@ -2425,7 +2425,12 @@ app.post('/api/zuckpay-charge', async (req, res) => {
 });
 
 app.get('/api/whop-checkout', async (req, res) => {
-  return res.status(503).send('Whop checkout is temporarily disabled. Please use Stripe checkout.');
+  try {
+    return await handleWhopCheckout(req, res);
+  } catch (err) {
+    console.error('Whop checkout error:', err);
+    return res.status(500).send('Checkout failed');
+  }
 });
 
 app.get('/api/stripe-checkout', async (req, res) => {
