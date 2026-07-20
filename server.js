@@ -14,7 +14,7 @@ const SITE_NAME = process.env.SITE_NAME || 'EbookStore';
 /** Telegram for post-payment redirect (checkout success on this host). Videos-site passes Supabase user via ?telegram_username= when possible. */
 const TELEGRAM_USERNAME = process.env.TELEGRAM_USERNAME || '';
 /** Default checkout for videos-site and bare /api/paypal-checkout links. */
-const CHECKOUT_DEFAULT_METHOD = 'whop';
+const CHECKOUT_DEFAULT_METHOD = 'payjsr';
 const PAYJSR_API_BASE = 'https://api.payjsr.com';
 const PAYJSR_CHECKOUT_BASE = String(process.env.PAYJSR_CHECKOUT_BASE_URL || 'https://checkout.payjsr.com').replace(
   /\/+$/,
@@ -34,26 +34,27 @@ const CHECKOUT_DISPLAY_CURRENCIES = [
   { code: 'MXN', name: 'Mexican Peso', symbol: '$', decimals: 2 },
 ];
 
-/** Shared light theme for all in-app checkout pages (matches videos/ebooks storefront). */
+/** Shared dark theme for all in-app checkout pages (matches videos/ebooks storefront). */
 const CHECKOUT_UI_CSS = `
     :root {
-      --bg: #ffffff;
-      --bg-deep: #ffffff;
-      --bg-mid: #ffffff;
-      --paper: #ffffff;
-      --paper-border: #e5e7eb;
-      --surface: #f7f8fa;
-      --primary: #0b6bcb;
-      --primary-hover: #0958a8;
-      --primary-deep: #0958a8;
-      --accent: #0b6bcb;
-      --text: #111827;
-      --muted: #6b7280;
-      --muted2: #6b7280;
-      --border: #e5e7eb;
+      --bg: #0a0a0c;
+      --bg-deep: #0a0a0c;
+      --bg-mid: #141418;
+      --paper: #141418;
+      --paper-border: rgba(255, 255, 255, 0.08);
+      --surface: #1c1c22;
+      --primary: #00aff0;
+      --primary-hover: #0095d4;
+      --primary-deep: #0095d4;
+      --accent: #00aff0;
+      --text: #f4f4f5;
+      --muted: #9ca3af;
+      --muted2: #9ca3af;
+      --border: rgba(255, 255, 255, 0.08);
+      --success: #34d399;
     }
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    html { color-scheme: light; }
+    html { color-scheme: dark; }
     body {
       font-family: 'DM Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
       min-height: 100vh;
@@ -62,6 +63,7 @@ const CHECKOUT_UI_CSS = `
       justify-content: center;
       padding: 28px 18px;
       background: var(--bg);
+      background-image: radial-gradient(ellipse 70% 45% at 50% -15%, rgba(0, 175, 240, 0.07), transparent);
       color: var(--text);
       position: relative;
       overflow-x: hidden;
@@ -72,7 +74,7 @@ const CHECKOUT_UI_CSS = `
       border-radius: 12px;
       background: var(--paper);
       border: 1px solid var(--border);
-      box-shadow: 0 8px 30px rgba(0, 0, 0, 0.06);
+      box-shadow: 0 16px 48px rgba(0, 0, 0, 0.45);
       overflow: hidden;
     }
     .card-accent { height: 3px; width: 100%; background: var(--primary); }
@@ -108,9 +110,9 @@ const CHECKOUT_UI_CSS = `
     .cancel-banner {
       font-size: 0.82rem;
       line-height: 1.45;
-      color: #92400e;
-      background: #fffbeb;
-      border: 1px solid #fde68a;
+      color: #fbbf24;
+      background: rgba(251, 191, 36, 0.1);
+      border: 1px solid rgba(251, 191, 36, 0.35);
       border-radius: 8px;
       padding: 0.65rem 0.75rem;
       margin-bottom: 0.85rem;
@@ -194,7 +196,7 @@ const CHECKOUT_UI_CSS = `
       border: 1px solid var(--border);
       background: var(--bg);
     }
-    #card-errors { font-size: 0.74rem; color: #dc2626; min-height: 1.1rem; margin-top: 0.45rem; }
+    #card-errors { font-size: 0.74rem; color: #f87171; min-height: 1.1rem; margin-top: 0.45rem; }
     .btn {
       display: block;
       width: 100%;
@@ -1820,8 +1822,8 @@ function sendZuckPayCardCheckoutPage(res, payload) {
       var elements = stripe.elements();
       var card = elements.create('card', {
         style: {
-          base: { color: '#111827', fontFamily: 'system-ui, sans-serif', fontSize: '16px', '::placeholder': { color: '#9ca3af' } },
-          invalid: { color: '#dc2626' }
+          base: { color: '#f4f4f5', fontFamily: 'system-ui, sans-serif', fontSize: '16px', '::placeholder': { color: '#9ca3af' } },
+          invalid: { color: '#f87171' }
         }
       });
       card.mount('#card-element');
@@ -2376,11 +2378,11 @@ function handlePayPalCheckout(req, res) {
 // Dispatcher:
 // - method=zuckpay -> ZuckPay international card (USD, Stripe) on this host
 // - method=stripe -> Stripe Checkout (masked line item) + redirect to checkout.stripe.com
-// - method=whop -> Whop checkout (API + redirect whop.com)
+// - method=whop -> temporarily disabled (no Whop account)
 // - method=paypal -> masked PayPal flow (on this host)
 // - method=paddle -> Paddle Billing: API transaction + Paddle.js overlay on this host
 // - method=payjsr -> PayJSR hosted checkout (ZAR) with FX preview on this host
-// Default: whop
+// Default: payjsr
 app.get('/api/paypal-checkout', async (req, res) => {
   try {
     const method = String(req.query.method || CHECKOUT_DEFAULT_METHOD).toLowerCase();
@@ -2391,7 +2393,7 @@ app.get('/api/paypal-checkout', async (req, res) => {
       return await handleStripeCheckout(req, res);
     }
     if (method === 'whop') {
-      return await handleWhopCheckout(req, res);
+      return res.status(503).send('Whop checkout is temporarily disabled. Please use PayJSR checkout.');
     }
     if (method === 'payjsr') {
       return await handlePayJSRCheckout(req, res);
@@ -2425,12 +2427,7 @@ app.post('/api/zuckpay-charge', async (req, res) => {
 });
 
 app.get('/api/whop-checkout', async (req, res) => {
-  try {
-    return await handleWhopCheckout(req, res);
-  } catch (err) {
-    console.error('Whop checkout error:', err);
-    return res.status(500).send('Checkout failed');
-  }
+  return res.status(503).send('Whop checkout is temporarily disabled. Please use Stripe checkout.');
 });
 
 app.get('/api/stripe-checkout', async (req, res) => {
